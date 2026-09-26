@@ -16,7 +16,7 @@ from pathlib import Path
 
 from fastmcp import Client
 
-from metrics import mean, recall_at_k, reciprocal_rank
+from metrics import lenient_recall_at_k, lenient_reciprocal_rank, mean, recall_at_k, reciprocal_rank
 
 HERE = Path(__file__).resolve().parent
 KS = (1, 3, 5, 10)
@@ -39,6 +39,9 @@ def unwrap(result) -> dict:
 def score(retrieved: list[tuple[str, int]], gold: set[tuple[str, int]]) -> dict:
     row = {f"recall@{k}": recall_at_k(retrieved, gold, k) for k in KS}
     row["rr"] = reciprocal_rank(retrieved, gold)
+    # lenient: a neighbouring chunk also counts, since chunks overlap
+    row.update({f"lenient_recall@{k}": lenient_recall_at_k(retrieved, gold, k) for k in KS})
+    row["lenient_rr"] = lenient_reciprocal_rank(retrieved, gold)
     # paper level: did we at least land in the right paper?
     gold_papers = {f for f, _ in gold}
     row["paper_hit@5"] = (
@@ -48,9 +51,11 @@ def score(retrieved: list[tuple[str, int]], gold: set[tuple[str, int]]) -> dict:
 
 
 def summarize(rows: list[dict]) -> dict:
-    keys = [f"recall@{k}" for k in KS] + ["rr", "paper_hit@5"]
+    keys = ([f"recall@{k}" for k in KS] + ["rr", "paper_hit@5"]
+            + [f"lenient_recall@{k}" for k in KS] + ["lenient_rr"])
     out = {k: mean([r[k] for r in rows]) for k in keys}
     out["mrr"] = out.pop("rr")
+    out["lenient_mrr"] = out.pop("lenient_rr")
     out["n"] = len(rows)
     out["latency_p50_ms"] = sorted(r["latency_ms"] for r in rows)[len(rows) // 2] if rows else None
     return out
@@ -72,7 +77,7 @@ async def run(args) -> None:
             gold = {(g["filename"], int(g["chunk_id"])) for g in q["gold_chunks"]}
             row = {"id": q["id"], "domain": q["domain"], "type": q["type"],
                    "latency_ms": latency_ms, **score(retrieved, gold),
-                   "retrieved": retrieved[:5]}
+                   "retrieved": retrieved}
             rows.append(row)
             first = "miss" if not row["rr"] else f"rank {round(1 / row['rr'])}"
             print(f"{q['id']}  {first:8s} {q['question'][:70]}")
@@ -91,6 +96,10 @@ async def run(args) -> None:
     print(f"{'':10s}" + "".join(f"{k:>10s}" for k in ("R@1", "R@3", "R@5", "R@10", "MRR", "paper@5")))
     for name, s in [("overall", overall), *by_domain.items()]:
         vals = [s["recall@1"], s["recall@3"], s["recall@5"], s["recall@10"], s["mrr"], s["paper_hit@5"]]
+        print(f"{name:10s}" + "".join(f"{v:10.3f}" for v in vals))
+    print("lenient (neighbouring chunk also counts):")
+    for name, s in [("overall", overall), *by_domain.items()]:
+        vals = [s[f"lenient_recall@{k}"] for k in KS] + [s["lenient_mrr"]]
         print(f"{name:10s}" + "".join(f"{v:10.3f}" for v in vals))
 
 

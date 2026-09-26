@@ -35,6 +35,32 @@ def reciprocal_rank(retrieved: list[ChunkKey], gold: set[ChunkKey]) -> float | N
         if chunk in gold:
             return 1 / rank
     return 0.0
+def _near(chunk: ChunkKey, gold_chunk: ChunkKey, window: int) -> bool:
+    return chunk[0] == gold_chunk[0] and abs(chunk[1] - gold_chunk[1]) <= window
+
+
+def lenient_recall_at_k(retrieved: list[ChunkKey], gold: set[ChunkKey], k: int, window: int = 1) -> float | None:
+    """Like recall_at_k, but a gold chunk also counts as found if a neighbour was retrieved.
+
+    Chunks overlap by CHUNK_OVERLAP characters, so the sentence a question was
+    written from often sits in the previous or next chunk as well.
+    """
+    if not gold:
+        return None
+    top_k = retrieved[:k]
+    found = sum(1 for g in gold if any(_near(r, g, window) for r in top_k))
+    return found / len(gold)
+
+
+def lenient_reciprocal_rank(retrieved: list[ChunkKey], gold: set[ChunkKey], window: int = 1) -> float | None:
+    if not gold:
+        return None
+    for rank, chunk in enumerate(retrieved, start=1):
+        if any(_near(chunk, g, window) for g in gold):
+            return 1 / rank
+    return 0.0
+
+
 def mean(values: list[float | None]) -> float | None:
     """Average that ignores None (questions the metric doesn't apply to)."""
     vals = [v for v in values if v is not None]

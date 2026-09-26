@@ -43,6 +43,50 @@ Users can upload research PDFs, classify them by domain (AI / Security / Other),
 | 💻 Code Walkthrough | [Watch on Google Drive](https://drive.google.com/file/d/1IWi8nq0XTAKhtk53FBtC684qcUNB0XFm/view?usp=sharing) |
 ---
 
+## Evaluation
+
+Every change to retrieval or the agent is measured against a fixed question set, so improvements show up as numbers instead of impressions.
+
+### Question set
+
+- 104 single-hop questions generated from the 30 indexed papers (`eval/questions_single_hop.jsonl`), roughly even across the three domains.
+- Each question is written by an LLM (DeepSeek, a different model family from the Gemini model under test) from one sampled chunk; that chunk becomes the gold answer, identified by `(filename, chunk_id)`.
+- Code-level filters drop what the prompt alone didn't prevent: chunks that are mostly tables or reference lists, and questions that copy a 5-word run from their passage (copied wording makes retrieval look easier than it is).
+- Chunking lives in one module (`mcp-server/chunking.py`) used by both indexing and question generation, with `pypdf` and the text splitter pinned. An earlier mismatch between library versions shifted chunk ids (2,970 vs 2,998 chunks), which would have silently broken every gold label.
+
+### Retrieval baseline
+
+Dense retrieval only (Gemini `gemini-embedding-001`, HNSW, cosine), 800-character chunks with 120 overlap, domain filter on.
+
+| Metric | Strict | Lenient (adjacent chunk counts) |
+|---|---:|---:|
+| Recall@1 | 0.625 | 0.721 |
+| Recall@3 | 0.827 | 0.894 |
+| Recall@5 | 0.913 | 0.942 |
+| Recall@10 | 0.933 | 0.952 |
+| MRR | 0.736 | 0.816 |
+| Right paper in top 5 | 1.000 | |
+
+p50 search latency: ~200 ms.
+
+Two metrics are reported because chunks overlap: the sentence a question came from often also sits at the edge of the neighbouring chunk. Of the 39 questions missed at rank 1, 10 had the adjacent chunk ranked first.
+
+What the numbers say:
+
+- **The corpus is too easy at the paper level.** The right paper is always in the top 5, and dropping the domain filter changes almost nothing (2 of 104 questions see a different top 5). The three domains are so far apart that finding the paper is trivial; the only hard part is finding the passage. A larger corpus of related papers is needed to test the former.
+- **Ranking, not recall, is the weak spot.** Recall@5 is 0.91 but Recall@1 is 0.63: the answer is usually retrieved, just not first. Reranking the top candidates is the obvious next step.
+
+Reproduce (stack running via `docker compose up`, papers ingested):
+
+```bash
+pip install -r eval/requirements.txt
+python eval/run_retrieval.py --label baseline            # per-question domain filter
+python eval/run_retrieval.py --domain All --label all    # no filter
+python -m pytest eval/tests -q                           # metric unit tests
+```
+
+---
+
 ## 2. System Architecture
 
 ```

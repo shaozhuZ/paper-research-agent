@@ -207,6 +207,7 @@ def vector_search(query: str, domain: str = "All", top_k: int = 4) -> Dict[str, 
             "filename": doc.metadata.get("filename", ""),
             "domain": doc.metadata.get("domain", ""),
             "score": float(score),
+            "chunk_id": doc.metadata.get("chunk_id",-1)
         }
         for doc, score in docs_and_scores
     ]

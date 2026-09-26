@@ -29,7 +29,7 @@ def get_stats() -> dict:
 
 
 @mcp.tool
-def index_paper(pdf_base64: str, filename: str, domain: str) -> dict:
+def index_paper(path: str, filename: str, domain: str) -> dict:
     return {"filename": filename, "domain": domain, "chunks_indexed": 1}
 
 

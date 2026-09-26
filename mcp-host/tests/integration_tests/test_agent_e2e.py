@@ -133,3 +133,18 @@ async def test_agent_recovers_after_tool_server_restart(server):
         assert [p["title"] for p in out["papers"]] == ["distill.pdf", "specdec.pdf"]
     finally:
         await agent.close()
+
+
+async def test_direct_tool_call_recovers_after_restart(server):
+    agent = await ResearchAgent.create(_cfg(server["port"]), llm=ScriptedLLM(script=[]))
+    try:
+        assert (await agent.call_tool("get_stats"))["AI"] == 4
+        server["proc"].kill()
+        server["proc"].wait()
+        server["proc"] = _start(server["port"])
+        # the old session is dead; the call should reconnect instead of failing
+        assert (await agent.call_tool("get_stats"))["AI"] == 4
+        res = await agent.call_tool("index_paper", path="/data/uploads/x.pdf", filename="x.pdf", domain="AI")
+        assert res["chunks_indexed"] == 1
+    finally:
+        await agent.close()

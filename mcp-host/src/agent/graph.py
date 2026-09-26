@@ -19,7 +19,7 @@ from langgraph.prebuilt import ToolNode, tools_condition
 
 from agent.config import AGENT_TOOLS, DOMAINS, Settings, settings as default_settings
 from agent.logging_setup import log_fields
-from agent.mcp_tools import MCPToolbox
+from agent.mcp_tools import MCPToolbox, ToolCallError
 from agent.parsing import FinalAnswer, Paper, content_to_text, dedupe_papers, parse_final_answer
 
 logger = logging.getLogger(__name__)
@@ -133,6 +133,22 @@ class ResearchAgent:
             self.graph = build_graph(self.llm, fresh.langchain_tools(AGENT_TOOLS))
             await old.close()
 
+    async def call_tool(self, name: str, **arguments: Any) -> Any:
+        """Direct tool call (no LLM) that survives a dropped MCP session."""
+        if not await self.toolbox.healthy():
+            logger.warning("MCP session is down before %s, reconnecting", name)
+            await self.reconnect()
+        try:
+            return await self.toolbox.call(name, **arguments)
+        except ToolCallError:
+            raise  # the tool ran and reported an error; reconnecting won't help
+        except Exception:
+            if await self.toolbox.healthy():
+                raise
+            logger.warning("MCP session dropped during %s, reconnecting and retrying", name)
+            await self.reconnect()
+            return await self.toolbox.call(name, **arguments)
+
     async def run(self, query: str, language: str, domain: str) -> dict[str, Any]:
         try:
             result = await self._run_once(query, language, domain)
@@ -208,7 +224,7 @@ class ResearchAgent:
         """Fill missing recommendations straight from the vector DB, bypassing the LLM."""
         if needed <= 0:
             return []
-        res = await self.toolbox.call(
+        res = await self.call_tool(
             "vector_search",
             query=query,
             domain=domain if domain in DOMAINS else "All",
@@ -223,7 +239,7 @@ class ResearchAgent:
 
         async def with_url(p: Paper) -> Paper:
             try:
-                r = await self.toolbox.call("search_paper_url", title=p.title)
+                r = await self.call_tool("search_paper_url", title=p.title)
                 return Paper(title=p.title, url=r.get("url", "") if isinstance(r, dict) else "")
             except Exception:
                 return p

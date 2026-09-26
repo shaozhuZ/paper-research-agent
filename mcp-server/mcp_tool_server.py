@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import base64
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any, Dict
 from urllib.parse import quote_plus
 
@@ -33,6 +33,8 @@ TRANSLATION_SERVICE_URL = os.getenv("TRANSLATION_SERVICE_URL", "http://localhost
 PORT = int(os.getenv("MCP_PORT", "9000"))
 DOMAINS = ("AI", "Security", "Other")
 MAX_TOP_K = 50
+# mcp-host writes uploaded PDFs here; index_paper only reads from inside it
+UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/data/uploads")).resolve()
 
 #—Milvus setup——
 def _build_index_params() -> tuple[Dict, Dict]:
@@ -152,11 +154,21 @@ def search_paper_url(title: str) -> Dict[str, str]:
 
 
 @mcp.tool
-def index_paper(pdf_base64: str, filename: str, domain: str) -> Dict[str, Any]:
+def index_paper(path: str, filename: str, domain: str) -> Dict[str, Any]:
+    """Index a PDF that has already been saved under UPLOAD_DIR.
+
+    The file is passed by path, not by content: a PDF of a few MB sent as
+    base64 goes over the MCP message size limit and the request is rejected.
+    """
     if domain not in DOMAINS:
         raise ValueError(f"domain must be one of {DOMAINS}")
+    pdf_path = Path(path).resolve()
+    if not pdf_path.is_relative_to(UPLOAD_DIR):
+        raise ValueError("path must be inside the upload directory")
+    if not pdf_path.is_file():
+        raise FileNotFoundError(f"no such upload: {pdf_path.name}")
 
-    chunks = split_pdf(base64.b64decode(pdf_base64), filename, domain)
+    chunks = split_pdf(pdf_path.read_bytes(), filename, domain)
     get_milvus().add_documents(chunks)
 
     return {"filename": filename, "domain": domain, "chunks_indexed": len(chunks)}

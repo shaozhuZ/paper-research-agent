@@ -73,6 +73,9 @@ services:
     environment:
       MILVUS_URI: http://milvus:19530
       TRANSLATION_SERVICE_URL: http://translation-service:7000
+      UPLOAD_DIR: /data/uploads
+    volumes:
+      - uploads:/data/uploads:ro
     ports:
       - "9000:9000"
     restart: on-failure
@@ -87,6 +90,9 @@ services:
     build: ./mcp-host
     environment:
       MCP_TOOL_URL: http://mcp-server:9000/mcp
+      UPLOAD_DIR: /data/uploads
+    volumes:
+      - uploads:/data/uploads
     ports:
       - "8000:8000"
     restart: on-failure
@@ -103,6 +109,7 @@ services:
       - mcp-host
 
 volumes:
+  uploads:
   etcd_data:
   minio_data:
   milvus_data:

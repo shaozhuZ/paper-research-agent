@@ -21,6 +21,9 @@ class FakeAgent:
         self.toolbox = FakeToolbox()
         self.calls = []
 
+    async def call_tool(self, name, **kw):
+        return await self.toolbox.call(name, **kw)
+
     async def run(self, query, language, domain):
         self.calls.append((query, language, domain))
         return {
@@ -35,8 +38,9 @@ class FakeAgent:
 
 
 @pytest.fixture()
-def client(monkeypatch):
+def client(monkeypatch, tmp_path):
     fake = FakeAgent()
+    monkeypatch.setattr(server, "UPLOAD_DIR", tmp_path)
 
     async def create(*a, **k):
         return fake
@@ -44,6 +48,7 @@ def client(monkeypatch):
     monkeypatch.setattr(server.ResearchAgent, "create", staticmethod(create))
     with TestClient(server.app) as c:
         c.fake = fake
+        c.upload_dir = tmp_path
         yield c
 
 
@@ -65,6 +70,9 @@ def test_upload_validates_domain(client):
     assert r.status_code == 400
     r = client.post("/upload", files={"file": ("a.pdf", b"%PDF")}, data={"domain": "AI"})
     assert r.status_code == 200 and r.json()["detail"]["chunks_indexed"] == 5
+    # the PDF is saved under its content hash and passed to the tool by path
+    saved = list(client.upload_dir.glob("*.pdf"))
+    assert len(saved) == 1 and saved[0].read_bytes() == b"%PDF"
 
 
 def test_stats_and_ok(client):

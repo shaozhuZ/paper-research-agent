@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import asyncio
-import base64
+import hashlib
 import logging
 import os
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -19,6 +20,10 @@ from agent.logging_setup import log_fields, request_id, setup_logging
 
 setup_logging(settings.log_level)
 logger = logging.getLogger("api")
+
+# Shared with mcp-server (a docker volume). PDFs go through here instead of
+# inside the MCP message, which has a size limit.
+UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/data/uploads"))
 
 Language = Literal["English", "Spanish", "French", "Italian"]
 QueryDomain = Literal["AI", "Security", "Other", "All"]
@@ -107,10 +112,15 @@ async def invoke(req: InvokeRequest, request: Request) -> InvokeResponse:
 async def upload(request: Request, file: UploadFile = File(...), domain: str = Form(...)) -> dict[str, Any]:
     if domain not in DOMAINS:
         raise HTTPException(status_code=400, detail=f"domain must be one of {DOMAINS}")
-    pdf_b64 = base64.b64encode(await file.read()).decode("ascii")
+    data = await file.read()
+    # name by content hash: the same PDF uploaded twice lands on the same file
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    saved = UPLOAD_DIR / f"{hashlib.sha256(data).hexdigest()}.pdf"
+    if not saved.exists():
+        saved.write_bytes(data)
     try:
-        detail = await _agent(request).toolbox.call(
-            "index_paper", pdf_base64=pdf_b64, filename=file.filename, domain=domain
+        detail = await _agent(request).call_tool(
+            "index_paper", path=str(saved), filename=file.filename, domain=domain
         )
     except Exception as e:
         logger.exception("upload failed")
@@ -121,7 +131,7 @@ async def upload(request: Request, file: UploadFile = File(...), domain: str = F
 @app.get("/stats", response_model=StatsResponse)
 async def stats(request: Request) -> StatsResponse:
     try:
-        result = await _agent(request).toolbox.call("get_stats")
+        result = await _agent(request).call_tool("get_stats")
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"get_stats failed: {e!r}")
     if not isinstance(result, dict):

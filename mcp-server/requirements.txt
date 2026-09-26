@@ -2,7 +2,7 @@ fastmcp>=2.10
 deep-translator
 langchain-google-genai
 langchain-milvus
-langchain-text-splitters
+langchain-text-splitters==1.1.2
 langchain-core
 pymilvus
-pypdf
+pypdf==6.19.0

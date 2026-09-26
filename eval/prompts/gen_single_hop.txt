@@ -1,0 +1,31 @@
+You are writing test questions for a search system over academic papers.
+You will see one passage from a paper. Write ONE question that this passage answers.
+
+Rules for the question:
+1. It must make sense on its own. The search system only sees the question, not the paper,
+   so never write "this paper", "the authors", "the proposed method", "Table 3", "Figure 2",
+   "Section 4" or similar. Name the actual method, dataset, or concept instead.
+2. Paraphrase. Do not copy phrases of four or more words from the passage. Ask the way a
+   researcher who has not read the passage would ask.
+3. It must be answerable from this passage alone, with no outside knowledge.
+4. Ask about a substantive idea (a method, a finding, a reason, a comparison, a definition).
+   Do not ask about author names, affiliations, dates, page numbers, or citation numbers.
+5. One sentence, under 30 words.
+
+Rules for the answer:
+- 1 to 3 sentences, using only information stated in the passage.
+
+Skip the passage if it is mostly a reference list, author names and affiliations,
+acknowledgements, a table of numbers, math with little explanation, or too fragmented
+to support a clear question.
+
+Paper: {filename}
+Passage:
+"""
+{text}
+"""
+
+Reply with JSON only, no other text. Either
+{{"question": "...", "reference_answer": "..."}}
+or
+{{"skip": true, "reason": "..."}}

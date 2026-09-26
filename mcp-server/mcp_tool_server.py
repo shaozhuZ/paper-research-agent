@@ -1,21 +1,19 @@
 from __future__ import annotations
 
 import base64
-import io
 import logging
 import os
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict
 from urllib.parse import quote_plus
 
 import requests as http_requests
 from fastmcp import FastMCP
-from langchain_core.documents import Document
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_milvus import Milvus
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from pypdf import PdfReader
 from pymilvus import MilvusClient
+
+from chunking import split_pdf
 
 #—FastMCP——
 mcp = FastMCP("Research Assistant Tools")
@@ -29,8 +27,6 @@ COLLECTION = os.getenv("MILVUS_COLLECTION", "research_papers")
 INDEX_TYPE = os.getenv("INDEX_TYPE", "HNSW").upper()
 TOP_K = int(os.getenv("TOP_K", "4"))
 EMB_MODEL = os.getenv("GEMINI_EMB_MODEL", "gemini-embedding-001")
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "800"))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "120"))
 S2_API_KEY = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "").strip()
 
 TRANSLATION_SERVICE_URL = os.getenv("TRANSLATION_SERVICE_URL", "http://localhost:7000")
@@ -160,27 +156,7 @@ def index_paper(pdf_base64: str, filename: str, domain: str) -> Dict[str, Any]:
     if domain not in DOMAINS:
         raise ValueError(f"domain must be one of {DOMAINS}")
 
-    pdf_bytes = base64.b64decode(pdf_base64)
-    reader = PdfReader(io.BytesIO(pdf_bytes))
-    full_text = "\n\n".join(page.extract_text() or "" for page in reader.pages).strip()
-
-    if not full_text:
-        raise ValueError(f"Could not extract text from {filename}.")
-
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE,
-        chunk_overlap=CHUNK_OVERLAP,
-        separators=["\n\n", "\n", " ", ""],
-    )
-    base_doc = Document(
-        page_content=full_text,
-        metadata={"filename": filename, "domain": domain},
-    )
-    chunks: List[Document] = splitter.split_documents([base_doc])
-
-    for i, chunk in enumerate(chunks):
-        chunk.metadata["chunk_id"] = i
-
+    chunks = split_pdf(base64.b64decode(pdf_base64), filename, domain)
     get_milvus().add_documents(chunks)
 
     return {"filename": filename, "domain": domain, "chunks_indexed": len(chunks)}

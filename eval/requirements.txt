@@ -1,0 +1,6 @@
+langchain-openai>=0.3
+langchain-google-genai>=3.0
+langchain-text-splitters==1.1.2
+pypdf==6.19.0
+requests>=2.31
+python-dotenv>=1.0

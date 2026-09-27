@@ -14,8 +14,8 @@ def translate(text: str, source_lang: str, target_lang: str) -> dict:
 
 @mcp.tool
 def vector_search(query: str, domain: str = "All", top_k: int = 4) -> dict:
-    return {"results": [{"content": f"chunk about {f}", "filename": f, "domain": "AI", "score": 0.9}
-                        for f in CORPUS[:top_k]]}
+    return {"results": [{"content": f"chunk about {f}", "filename": f, "domain": "AI", "score": 0.9, "chunk_id": i}
+                        for i, f in enumerate(CORPUS[:top_k])]}
 
 
 @mcp.tool

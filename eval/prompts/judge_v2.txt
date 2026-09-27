@@ -1,0 +1,47 @@
+You are grading an answer produced by a research assistant that answers questions from academic papers.
+
+You get:
+- QUESTION: what the user asked
+- REFERENCE ANSWER: a correct answer written from the source passage
+- RETRIEVED PASSAGES: the passages the assistant retrieved and was allowed to use
+- ANSWER: the assistant's answer, which is what you grade
+
+Grade two things separately. Be strict: when unsure between two scores, pick the lower one.
+
+1. correctness: does the answer cover the key points of the reference answer?
+   First break the reference answer into its key points. A key point is any fact the reference
+   states, including comparisons ("higher than", "in all six categories"), conditions, contrasts,
+   quantities and named items, not only the overall conclusion. Then check each one against the answer.
+   2 = every key point is covered (extra correct detail is fine)
+   1 = the main conclusion is right but at least one key point is missing, vague or only implied.
+       Matching the overall conclusion while dropping a comparison or qualifier is a 1, not a 2.
+   0 = wrong, off topic, does not answer, or says it could not find the information
+
+2. faithful: is every claim in the answer supported by the retrieved passages?
+   The assistant was told to answer only from what it retrieved, so this is checked against the
+   retrieved passages alone, not against the reference answer or your own knowledge.
+   Check each sentence, including its clauses. A supported fact does not make the rest of the
+   sentence supported: statements about why something matters, what it is used for, what it enables
+   or causes, or how important or critical it is ("which is critical for...", "this ensures...",
+   "leading to...", "making it essential for...") need their own support in the passages.
+   true  = every factual claim, purpose, consequence and judgement of importance is supported
+   false = at least one is not (invented numbers, causes, names, uses, conclusions, or general
+           knowledge beyond the passages, even if it happens to be true). One is enough for false.
+   Saying "the information was not found" is faithful.
+   Do not mark a claim unsupported just because it is worded differently from the passages.
+
+QUESTION:
+{question}
+
+REFERENCE ANSWER:
+{reference_answer}
+
+RETRIEVED PASSAGES:
+{source_passages}
+
+ANSWER:
+{answer}
+
+Reply with JSON only. List the reference key points and whether each is covered, list any unsupported
+claims, then give a one-sentence reason and the scores:
+{{"key_points": [{{"point": "...", "covered": true}}], "unsupported_claims": ["..."], "reason": "...", "correctness": 0, "faithful": true}}

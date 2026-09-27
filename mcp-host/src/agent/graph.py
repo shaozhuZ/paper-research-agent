@@ -20,7 +20,14 @@ from langgraph.prebuilt import ToolNode, tools_condition
 from agent.config import AGENT_TOOLS, DOMAINS, Settings, settings as default_settings
 from agent.logging_setup import log_fields
 from agent.mcp_tools import MCPToolbox, ToolCallError
-from agent.parsing import FinalAnswer, Paper, content_to_text, dedupe_papers, parse_final_answer
+from agent.parsing import (
+    FinalAnswer,
+    Paper,
+    content_to_text,
+    dedupe_papers,
+    extract_json_object,
+    parse_final_answer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +92,27 @@ def build_graph(llm: Any, tools: list) -> Any:
     g.add_conditional_edges("llm", tools_condition, {"tools": "tools", END: END})
     g.add_edge("tools", "llm")
     return g.compile()
+
+
+def _retrieved_contexts(messages: list) -> list[dict[str, Any]]:
+    """Chunks returned by every vector_search call in this run, in order, de-duplicated.
+
+    These are what the model actually saw, so they are what an answer has to be
+    faithful to.
+    """
+    seen, out = set(), []
+    for m in messages:
+        if not isinstance(m, ToolMessage) or m.name != "vector_search":
+            continue
+        data = extract_json_object(content_to_text(m.content))
+        for hit in (data or {}).get("results", []):
+            key = (hit.get("filename"), hit.get("chunk_id"))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"filename": hit.get("filename", ""), "chunk_id": hit.get("chunk_id", -1),
+                        "content": hit.get("content", "")})
+    return out
 
 
 def _trace_stats(messages: list) -> dict[str, Any]:
@@ -194,6 +222,7 @@ class ResearchAgent:
 
         stats = _trace_stats(out["messages"])
         result["_tool_errors"] = stats["tool_errors"]
+        result["contexts"] = _retrieved_contexts(out["messages"])
         log_fields(
             logger,
             "agent run",

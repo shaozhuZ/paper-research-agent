@@ -40,11 +40,19 @@ class PaperResult(BaseModel):
     url: str = ""
 
 
+class Context(BaseModel):
+    filename: str
+    chunk_id: int
+    content: str
+
+
 class InvokeResponse(BaseModel):
     answer: str
     papers: list[PaperResult]
     recommended_papers: list[PaperResult] = []
     language: str
+    # the chunks the agent retrieved; used to check answers against what it actually saw
+    contexts: list[Context] = []
 
 
 class StatsResponse(BaseModel):

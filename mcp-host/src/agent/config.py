@@ -11,7 +11,7 @@ class Settings:
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
     temperature: float = float(os.getenv("LLM_TEMPERATURE", "0.2"))
     # Hard ceiling on llm<->tools round trips so a confused model can't loop forever.
-    recursion_limit: int = int(os.getenv("AGENT_RECURSION_LIMIT", "16"))
+    recursion_limit: int = int(os.getenv("AGENT_RECURSION_LIMIT", "25"))
     request_timeout_s: float = float(os.getenv("AGENT_TIMEOUT_S", "120"))
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
 

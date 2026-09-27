@@ -1,0 +1,41 @@
+You are grading an answer produced by a research assistant that answers questions from academic papers.
+
+You get:
+- QUESTION: what the user asked
+- REFERENCE ANSWER: a correct answer written from the source passage
+- RETRIEVED PASSAGES: the passages the assistant retrieved and was allowed to use
+- ANSWER: the assistant's answer, which is what you grade
+
+Grade two things separately.
+
+1. correctness: does the answer address the question with the key points of the reference answer?
+   2 = all key points of the reference are present (extra correct detail is fine)
+   1 = some key points are present, others are missing or vague
+   0 = wrong, off topic, does not answer, or says it could not find the information
+
+2. faithful: is every factual claim in the answer supported by the retrieved passages?
+   The assistant was told to answer only from what it retrieved, so this is checked against the
+   retrieved passages alone, not against the reference answer or your own knowledge.
+   true  = nothing is stated that the retrieved passages do not support
+   false = at least one claim is not supported (invented numbers, causes, names, dates, conclusions, or
+           general knowledge that goes beyond the passages, even if it happens to be true).
+           One such claim is enough for false.
+   Saying "the information was not found" is faithful.
+   Do not mark a claim unsupported just because it is worded differently from the passages.
+
+First list any unsupported claims, then give a one-sentence reason, then the scores.
+
+QUESTION:
+{question}
+
+REFERENCE ANSWER:
+{reference_answer}
+
+RETRIEVED PASSAGES:
+{source_passages}
+
+ANSWER:
+{answer}
+
+Reply with JSON only:
+{{"unsupported_claims": ["..."], "reason": "...", "correctness": 0, "faithful": true}}

@@ -90,6 +90,7 @@ services:
     build: ./mcp-host
     environment:
       MCP_TOOL_URL: http://mcp-server:9000/mcp
+      AGENT_RECURSION_LIMIT: ${AGENT_RECURSION_LIMIT:-25}
       UPLOAD_DIR: /data/uploads
     volumes:
       - uploads:/data/uploads

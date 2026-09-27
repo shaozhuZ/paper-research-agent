@@ -23,3 +23,6 @@ data/
 papers/
 eval/results/
 bench_results/
+
+# private working notes
+notes/

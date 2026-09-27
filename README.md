@@ -76,6 +76,35 @@ What the numbers say:
 - **The corpus is too easy at the paper level.** The right paper is always in the top 5, and dropping the domain filter changes almost nothing (2 of 104 questions see a different top 5). The three domains are so far apart that finding the paper is trivial; the only hard part is finding the passage. A larger corpus of related papers is needed to test the former.
 - **Ranking, not recall, is the weak spot.** Recall@5 is 0.91 but Recall@1 is 0.63: the answer is usually retrieved, just not first. Reranking the top candidates is the obvious next step.
 
+### Answer baseline (full agent)
+
+The agent answers all 104 questions through `/invoke` and returns the chunks it retrieved. A DeepSeek judge grades each answer on two separate axes:
+
+- **correctness** (0/1/2): the reference answer is split into key points, including comparisons and qualifiers; missing any one caps the score at 1.
+- **faithful** (yes/no): every claim, including stated purposes, consequences and "this is critical" judgements, must be supported by the chunks the agent actually retrieved. Correct general knowledge that isn't in them still counts as unfaithful, since the system prompt restricts answers to retrieved context.
+
+| Metric | Value |
+|---|---:|
+| No answer (tool-call loop hit 25 steps) | 11 / 104 (10.6%) |
+| Correctness = 2 (of answered) | 77 / 93 |
+| Unfaithful (of answered) | 82% |
+| **Correct and faithful (of all 104)** | **16%** |
+| Latency p50 / p95 | 30 s / 101 s |
+| Cost | ~$0.02 per question (Gemini 3 Flash) |
+
+The system usually finds and states the right answer, then pads it with claims the retrieved text doesn't support, e.g. "which is critical for synchronizing behavioral data with neural activity" after a correctly cited fact about timing precision. Retrieval is not the bottleneck; generation is.
+
+Loops are not tied to specific questions: two runs at the same step limit failed on mostly different questions (2 in common), so the prompt-driven control flow is also non-deterministic. At a 16-step limit, 25% of questions never finished.
+
+**Judge calibration.** 20 answers were labelled by hand, on the same retrieved chunks the judge sees, without showing the judge's scores.
+
+| Judge prompt | Correctness agreement | Faithfulness agreement | Pass/fail agreement |
+|---|---:|---:|---:|
+| v1 | 65% | 75% | 65% |
+| v2 (key-point breakdown, explicit rule on added purposes/consequences) | 85% | 65% | 75% |
+
+v1 was lenient in 11 of 12 disagreements; v2 fixed correctness but overshoots on faithfulness (strict in 6 of 7). v2 is the judge of record because its aggregate rates are closest to the human labels (human: 20% pass, 70% unfaithful on the sample). The prompt was tuned on these same 20 answers, so agreement is optimistic until checked on a held-out set.
+
 Reproduce (stack running via `docker compose up`, papers ingested):
 
 ```bash
@@ -83,6 +112,11 @@ pip install -r eval/requirements.txt
 python eval/run_retrieval.py --label baseline            # per-question domain filter
 python eval/run_retrieval.py --domain All --label all    # no filter
 python -m pytest eval/tests -q                           # metric unit tests
+
+python eval/run_agent.py --label v0                      # agent answers (costs Gemini tokens)
+python eval/judge_answers.py --answers v0 --label v0_j2 --prompt judge_v2
+python eval/calibrate.py sheet --judged v0_j2            # human labelling sheet
+python eval/calibrate.py compare --judged v0_j2
 ```
 
 ---

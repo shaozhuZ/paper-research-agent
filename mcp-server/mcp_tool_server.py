@@ -10,9 +10,9 @@ from urllib.parse import quote_plus
 import requests as http_requests
 from fastmcp import FastMCP
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_milvus import Milvus
 from pymilvus import MilvusClient
 
+import retrieval
 from chunking import split_pdf
 
 #—FastMCP——
@@ -23,9 +23,19 @@ logger = logging.getLogger("mcp-server")
 #—Config (env-driven)——
 MILVUS_URI = os.getenv("MILVUS_URI", "http://localhost:19530")
 MILVUS_TOKEN = os.getenv("MILVUS_TOKEN", "")
-COLLECTION = os.getenv("MILVUS_COLLECTION", "research_papers")
+COLLECTION = os.getenv("MILVUS_COLLECTION", "research_papers_v2")
 INDEX_TYPE = os.getenv("INDEX_TYPE", "HNSW").upper()
 TOP_K = int(os.getenv("TOP_K", "4"))
+# what vector_search (the agent's tool) uses: dense | bm25 | hybrid
+RETRIEVAL_MODE = os.getenv("RETRIEVAL_MODE", "dense")
+# hybrid: how many hits each side contributes before RRF, and the RRF constant
+HYBRID_CANDIDATES = int(os.getenv("HYBRID_CANDIDATES", "50"))
+RRF_K = int(os.getenv("RRF_K", "60"))
+# rerank: re-score this many candidates from the first-stage search with a cross-encoder
+RETRIEVAL_RERANK = os.getenv("RETRIEVAL_RERANK", "false").lower() in ("1", "true", "yes")
+RERANK_CANDIDATES = int(os.getenv("RERANK_CANDIDATES", "30"))
+RERANK_MODEL = os.getenv("RERANK_MODEL", "rerank-3")
+VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "").strip()
 EMB_MODEL = os.getenv("GEMINI_EMB_MODEL", "gemini-embedding-001")
 S2_API_KEY = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "").strip()
 
@@ -64,34 +74,64 @@ def _build_index_params() -> tuple[Dict, Dict]:
     return index_params, search_params
 
 
-def _get_milvus() -> Milvus:
-    embeddings = GoogleGenerativeAIEmbeddings(model=EMB_MODEL)
+_client: MilvusClient | None = None
+_embeddings: GoogleGenerativeAIEmbeddings | None = None
 
-    conn_args = {"uri": MILVUS_URI}
-    if MILVUS_TOKEN:
-        conn_args["token"] = MILVUS_TOKEN
 
-    index_params, search_params = _build_index_params()
+_loaded = False
 
-    return Milvus(
-        embedding_function=embeddings,
-        collection_name=COLLECTION,
-        connection_args=conn_args,
-        index_params=index_params,
-        search_params=search_params,
-        auto_id=True,
-        drop_old=False,
+
+def get_client() -> MilvusClient:
+    global _client
+    if _client is None:
+        _client = MilvusClient(uri=MILVUS_URI, token=MILVUS_TOKEN or "")
+    return _client
+
+
+def ensure_loaded() -> None:
+    # search needs the collection in memory; a Milvus restart can leave it released
+    global _loaded
+    if not _loaded:
+        get_client().load_collection(COLLECTION)
+        _loaded = True
+
+
+def get_embeddings() -> GoogleGenerativeAIEmbeddings:
+    global _embeddings
+    if _embeddings is None:
+        _embeddings = GoogleGenerativeAIEmbeddings(model=EMB_MODEL)
+    return _embeddings
+
+
+def _search(query: str, domain: str, top_k: int, mode: str, rerank: bool = False) -> Dict[str, Any]:
+    if mode not in retrieval.MODES:
+        raise ValueError(f"mode must be one of {retrieval.MODES}")
+    # domain goes into a filter expression, so only allow known values
+    if domain != "All" and domain not in DOMAINS:
+        raise ValueError(f"domain must be one of {DOMAINS} or 'All'")
+    top_k = max(1, min(int(top_k), MAX_TOP_K))
+    # with rerank, fetch a wider first-stage list and let the reranker pick from it
+    first_k = max(top_k, RERANK_CANDIDATES) if rerank else top_k
+    expr = None if domain == "All" else f'domain == "{domain}"'
+    # BM25 alone doesn't need the query embedding, so skip that API call
+    qvec = None if mode == "bm25" else get_embeddings().embed_query(query)
+    _, dense_params = _build_index_params()
+    ensure_loaded()
+    results = retrieval.search(
+        get_client(), COLLECTION, query, qvec,
+        mode=mode, top_k=first_k, expr=expr, dense_params=dense_params,
+        candidates=HYBRID_CANDIDATES, rrf_k=RRF_K,
     )
-
-#declares a global variable
-_milvus: Milvus | None = None
-
-
-def get_milvus() -> Milvus:
-    global _milvus
-    if _milvus is None:
-        _milvus = _get_milvus()
-    return _milvus
+    reranked = False
+    if rerank:
+        try:
+            results = retrieval.rerank(query, results, top_k=top_k, model=RERANK_MODEL, api_key=VOYAGE_API_KEY)
+            reranked = True
+        except retrieval.RerankError as e:
+            # keep answering with the first-stage order rather than failing the search
+            logger.warning("rerank unavailable, using %s order: %s", mode, e)
+            results = results[:top_k]
+    return {"results": results, "reranked": reranked}
 
 
 #—Tools——
@@ -169,53 +209,38 @@ def index_paper(path: str, filename: str, domain: str) -> Dict[str, Any]:
         raise FileNotFoundError(f"no such upload: {pdf_path.name}")
 
     chunks = split_pdf(pdf_path.read_bytes(), filename, domain)
-    get_milvus().add_documents(chunks)
+    vectors = get_embeddings().embed_documents([c.page_content for c in chunks])
+    client = get_client()
+    if not client.has_collection(COLLECTION):
+        index_params, _ = _build_index_params()
+        retrieval.create_collection(client, COLLECTION, len(vectors[0]), index_params)
+    client.insert(COLLECTION, [
+        {"text": c.page_content, "vector": v, "filename": filename, "domain": domain,
+         "chunk_id": c.metadata["chunk_id"]}
+        for c, v in zip(chunks, vectors)
+    ])
 
     return {"filename": filename, "domain": domain, "chunks_indexed": len(chunks)}
 
 
 @mcp.tool
 def vector_search(query: str, domain: str = "All", top_k: int = 4) -> Dict[str, Any]:
-    """Semantic search over indexed paper chunks. domain: AI | Security | Other | All."""
-    # domain goes into a filter expression, so only allow known values
-    if domain != "All" and domain not in DOMAINS:
-        raise ValueError(f"domain must be one of {DOMAINS} or 'All'")
-    top_k = max(1, min(int(top_k), MAX_TOP_K))
-    expr = None if domain == "All" else f'domain == "{domain}"'
-
-    docs_and_scores = get_milvus().similarity_search_with_score(
-        query=query,
-        k=top_k,
-        expr=expr,
-    )
-
-    results = [
-        {
-            "content": doc.page_content,
-            "filename": doc.metadata.get("filename", ""),
-            "domain": doc.metadata.get("domain", ""),
-            "score": float(score),
-            "chunk_id": doc.metadata.get("chunk_id",-1)
-        }
-        for doc, score in docs_and_scores
-    ]
-    return {"results": results}
+    """Search indexed paper chunks. domain: AI | Security | Other | All."""
+    return _search(query, domain, top_k, RETRIEVAL_MODE, RETRIEVAL_RERANK)
 
 
-_stats_client: MilvusClient | None = None
-
-
-def _milvus_client() -> MilvusClient:
-    global _stats_client
-    if _stats_client is None:
-        _stats_client = MilvusClient(uri=MILVUS_URI, token=MILVUS_TOKEN or "")
-    return _stats_client
+@mcp.tool
+def retrieve(
+    query: str, domain: str = "All", top_k: int = 4, mode: str = "dense", rerank: bool = False
+) -> Dict[str, Any]:
+    """Same as vector_search with an explicit mode (dense | bm25 | hybrid) and optional rerank. For evaluation."""
+    return _search(query, domain, top_k, mode, rerank)
 
 
 @mcp.tool
 def get_stats() -> Dict[str, int]:
     """Number of distinct indexed papers per domain."""
-    client = _milvus_client()
+    client = get_client()
     counts: Dict[str, int] = {"AI": 0, "Security": 0, "Other": 0}
 
     try:
@@ -249,4 +274,4 @@ def get_stats() -> Dict[str, int]:
 
 #—Entry——
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=PORT)
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=PORT)

@@ -4,6 +4,11 @@ Talks to the MCP tool server directly, so it measures retrieval on its own,
 without the LLM in the loop.
 
     python eval/run_retrieval.py --questions eval/questions_single_hop.jsonl --label baseline
+    python eval/run_retrieval.py --mode hybrid --label hybrid
+    python eval/run_retrieval.py --mode hybrid --rerank --label hybrid_rerank
+
+Without --mode it calls vector_search (whatever mode the server is set to);
+with --mode it calls the retrieve tool, so modes can be compared side by side.
 """
 from __future__ import annotations
 
@@ -67,10 +72,15 @@ async def run(args) -> None:
     async with Client(args.mcp) as client:
         for q in questions:
             t0 = time.perf_counter()
-            res = unwrap(await client.call_tool(
-                "vector_search",
-                {"query": q["question"], "domain": args.domain or q["domain"], "top_k": max(KS)},
-            ))
+            params = {"query": q["question"], "domain": args.domain or q["domain"], "top_k": max(KS)}
+            if args.mode:
+                res = unwrap(await client.call_tool("retrieve", {**params, "mode": args.mode, "rerank": args.rerank}))
+                # the server falls back to first-stage order if rerank fails; that must not
+                # end up in a table labelled "rerank"
+                if args.rerank and not res.get("reranked"):
+                    raise SystemExit(f"{q['id']}: rerank did not run (check VOYAGE_API_KEY and mcp-server logs)")
+            else:
+                res = unwrap(await client.call_tool("vector_search", params))
             latency_ms = round((time.perf_counter() - t0) * 1000)
             hits = res.get("results", [])
             retrieved = [(h["filename"], int(h["chunk_id"])) for h in hits]
@@ -88,7 +98,9 @@ async def run(args) -> None:
 
     out_dir = HERE / "results"
     out_dir.mkdir(exist_ok=True)
-    out = {"label": args.label, "questions": args.questions, "domain_filter": args.domain or "per-question",
+    out = {"label": args.label, "mode": args.mode or "server default", "rerank": args.rerank,
+           "questions": args.questions,
+           "domain_filter": args.domain or "per-question",
            "overall": overall, "by_domain": by_domain, "rows": rows}
     (out_dir / f"retrieval_{args.label}.json").write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -109,7 +121,12 @@ def main() -> None:
     ap.add_argument("--mcp", default="http://localhost:9000/mcp")
     ap.add_argument("--domain", default=None, help="force a domain filter, e.g. All")
     ap.add_argument("--label", default="run")
-    asyncio.run(run(ap.parse_args()))
+    ap.add_argument("--mode", choices=("dense", "bm25", "hybrid"), default=None)
+    ap.add_argument("--rerank", action="store_true", help="rerank the first-stage candidates (needs --mode)")
+    args = ap.parse_args()
+    if args.rerank and not args.mode:
+        ap.error("--rerank needs --mode")
+    asyncio.run(run(args))
 
 
 if __name__ == "__main__":

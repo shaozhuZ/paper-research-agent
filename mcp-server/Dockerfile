@@ -11,7 +11,7 @@ COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Copy server code
-COPY mcp_tool_server.py chunking.py /app/
+COPY mcp_tool_server.py chunking.py retrieval.py migrate_to_hybrid.py /app/
 
 # Expose MCP HTTP port
 EXPOSE 9000

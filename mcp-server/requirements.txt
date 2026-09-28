@@ -2,8 +2,8 @@ fastmcp==3.4.7
 mcp==1.30.0
 deep-translator
 langchain-google-genai
-langchain-milvus
 langchain-text-splitters==1.1.2
 langchain-core
-pymilvus
+# client line matching the Milvus 2.5 server in docker-compose
+pymilvus>=2.5.4,<2.6
 pypdf==6.19.0

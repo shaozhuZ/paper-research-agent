@@ -74,6 +74,11 @@ services:
       MILVUS_URI: http://milvus:19530
       TRANSLATION_SERVICE_URL: http://translation-service:7000
       UPLOAD_DIR: /data/uploads
+      MILVUS_COLLECTION: research_papers_v2
+      # dense | bm25 | hybrid, for the agent's vector_search tool
+      RETRIEVAL_MODE: ${RETRIEVAL_MODE:-dense}
+      RETRIEVAL_RERANK: ${RETRIEVAL_RERANK:-false}
+      RERANK_MODEL: ${RERANK_MODEL:-rerank-3}
     volumes:
       - uploads:/data/uploads:ro
     ports:

@@ -67,9 +67,10 @@ def main() -> None:
     ap.add_argument("--model", default=DEFAULT_EVAL_MODEL)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--prompt", default="judge_v2", help="prompt file name under eval/prompts/")
+    ap.add_argument("--limit", type=int, default=None, help="only the first N questions, to match run_agent.py --limit")
     args = ap.parse_args()
 
-    questions = {q["id"]: q for q in load_jsonl(Path(args.questions))}
+    questions = {q["id"]: q for q in load_jsonl(Path(args.questions))[: args.limit]}
     chunks = {(c["filename"], c["chunk_id"]): c["text"] for c in load_jsonl(HERE / "data" / "chunks.jsonl")}
     answers = merge_answers(args.answers)
     template = (HERE / "prompts" / f"{args.prompt}.txt").read_text(encoding="utf-8")

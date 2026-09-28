@@ -116,7 +116,9 @@ async def test_agent_run_with_fallback(server):
     recs = out["recommended_papers"]
     assert [p["title"] for p in recs] == ["paged.pdf", "effnet.pdf"]  # effnet came from fallback
     assert recs[1]["url"] == "https://example.org/effnet.pdf"
-    assert set(out) == {"answer", "papers", "recommended_papers", "language", "contexts"}
+    assert set(out) == {"answer", "papers", "recommended_papers", "language", "contexts", "usage"}
+    assert out["usage"]["llm_turns"] == 3
+    assert out["usage"]["tool_calls"] == ["vector_search", "search_paper_url"]
     # only the chunks from the LLM's vector_search call, not the fallback's
     assert [c["filename"] for c in out["contexts"]] == ["distill.pdf", "specdec.pdf", "paged.pdf", "effnet.pdf"]
 

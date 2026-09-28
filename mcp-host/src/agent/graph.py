@@ -12,12 +12,12 @@ import time
 from typing import Annotated, Any, TypedDict
 
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
 from agent.config import AGENT_TOOLS, DOMAINS, Settings, settings as default_settings
+from agent.llm import make_llm
 from agent.logging_setup import log_fields
 from agent.mcp_tools import MCPToolbox, ToolCallError
 from agent.parsing import (
@@ -83,7 +83,11 @@ def build_graph(llm: Any, tools: list) -> Any:
         msgs = state["messages"]
         if not msgs or msgs[0].type != "system":
             msgs = [system, *msgs]
-        return {"messages": [await llm_with_tools.ainvoke(msgs)]}
+        t0 = time.perf_counter()
+        resp = await llm_with_tools.ainvoke(msgs)
+        # time per LLM call, so a run can be split into model time vs tool time
+        resp.response_metadata["latency_ms"] = round((time.perf_counter() - t0) * 1000)
+        return {"messages": [resp]}
 
     g = StateGraph(AgentState)
     g.add_node("llm", llm_node)
@@ -124,7 +128,12 @@ def _trace_stats(messages: list) -> dict[str, Any]:
         "tool_calls": calls,
         "tool_errors": sum(1 for m in messages if isinstance(m, ToolMessage) and m.status == "error"),
         "input_tokens": sum(u.get("input_tokens", 0) for u in usage),
+        # part of input_tokens served from the provider's prompt cache (billed lower)
+        "cached_tokens": sum((u.get("input_token_details") or {}).get("cache_read", 0) for u in usage),
         "output_tokens": sum(u.get("output_tokens", 0) for u in usage),
+        # thinking tokens; not every provider reports them separately
+        "reasoning_tokens": sum((u.get("output_token_details") or {}).get("reasoning", 0) for u in usage),
+        "llm_ms": sum(m.response_metadata.get("latency_ms", 0) for m in ai),
     }
 
 
@@ -141,7 +150,7 @@ class ResearchAgent:
     @classmethod
     async def create(cls, cfg: Settings = default_settings, llm: Any = None) -> "ResearchAgent":
         if llm is None:
-            llm = ChatGoogleGenerativeAI(model=cfg.gemini_model, temperature=cfg.temperature)
+            llm = make_llm(cfg)
         toolbox = MCPToolbox(cfg.mcp_tool_url)
         await toolbox.start()
         return cls(cfg, llm, toolbox)
@@ -223,10 +232,12 @@ class ResearchAgent:
         stats = _trace_stats(out["messages"])
         result["_tool_errors"] = stats["tool_errors"]
         result["contexts"] = _retrieved_contexts(out["messages"])
+        latency_ms = round((time.perf_counter() - t0) * 1000)
+        result["usage"] = {**stats, "latency_ms": latency_ms, "model": self.cfg.llm_model}
         log_fields(
             logger,
             "agent run",
-            latency_ms=round((time.perf_counter() - t0) * 1000),
+            latency_ms=latency_ms,
             parsed_ok=parsed_ok,
             fallback_used=result["_fallback_used"],
             **stats,

@@ -53,6 +53,8 @@ class InvokeResponse(BaseModel):
     language: str
     # the chunks the agent retrieved; used to check answers against what it actually saw
     contexts: list[Context] = []
+    # turns, tool calls, tokens and timings for this run
+    usage: dict[str, Any] = {}
 
 
 class StatsResponse(BaseModel):

@@ -83,7 +83,6 @@ FINAL = json.dumps({
 def _script():
     return [
         _tool_call("vector_search", {"query": "distillation", "domain": "AI", "top_k": 4}, 1),
-        _tool_call("search_paper_url", {"title": "paged.pdf"}, 2),
         AIMessage(content=f"```json\n{FINAL}\n```"),
     ]
 
@@ -115,10 +114,10 @@ async def test_agent_run_with_fallback(server):
     assert [p["title"] for p in out["papers"]] == ["distill.pdf", "specdec.pdf"]
     recs = out["recommended_papers"]
     assert [p["title"] for p in recs] == ["paged.pdf", "effnet.pdf"]  # effnet came from fallback
-    assert recs[1]["url"] == "https://example.org/effnet.pdf"
+    assert recs[1]["url"] == ""  # URL lookup is switched off
     assert set(out) == {"answer", "papers", "recommended_papers", "language", "contexts", "usage"}
-    assert out["usage"]["llm_turns"] == 3
-    assert out["usage"]["tool_calls"] == ["vector_search", "search_paper_url"]
+    assert out["usage"]["llm_turns"] == 2
+    assert out["usage"]["tool_calls"] == ["vector_search"]
     # only the chunks from the LLM's vector_search call, not the fallback's
     assert [c["filename"] for c in out["contexts"]] == ["distill.pdf", "specdec.pdf", "paged.pdf", "effnet.pdf"]
 

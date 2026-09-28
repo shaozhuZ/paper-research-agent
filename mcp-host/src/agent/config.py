@@ -24,5 +24,7 @@ settings = Settings()
 
 # Only these tools are exposed to the LLM. index_paper / get_stats stay callable
 # from the API directly but never show up in the model's tool list.
-AGENT_TOOLS = ("translate", "vector_search", "search_paper_url")
+# search_paper_url is left out for now: Semantic Scholar rate-limits us almost every
+# call, and the retries added ~15 s to each answer. The tool still exists on the server.
+AGENT_TOOLS = ("translate", "vector_search")
 DOMAINS = ("AI", "Security", "Other")

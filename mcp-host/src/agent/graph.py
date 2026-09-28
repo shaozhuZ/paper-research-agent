@@ -37,15 +37,13 @@ SYSTEM_PROMPT = """
 #Tools available:
 - translate(text, source_lang, target_lang): Translate text between English, Spanish, French, Italian.
 - vector_search(query, domain, top_k): Search the academic paper database using cosine similarity.
-- search_paper_url(title): Search for a paper's URL on Semantic Scholar by title.
 
 #Workflow for answering a research query:
 1. If the query is not in English, call translate() to convert it to English first.
 2. Call vector_search() with the English query and the specified domain filter.
 3. Using ONLY the retrieved context, generate a thorough answer in English.
-4. For each recommended paper, call search_paper_url(filename) to get its real URL.
-5. If the target language is not English, call translate() to convert the answer to the target language.
-6. Return the final answer, 2 reference papers, and 2 recommended papers.
+4. If the target language is not English, call translate() to convert the answer to the target language.
+5. Return the final answer, 2 reference papers, and 2 recommended papers.
 
 #Output format:
 Always respond with a JSON object in this exact format:
@@ -215,8 +213,7 @@ class ResearchAgent:
         user_message = (
             f"Query: {query}\n"
             f"Target language for the answer: {language}\n"
-            f"Domain filter: {domain}\n"
-            "IMPORTANT: You MUST call search_paper_url() for each recommended paper before returning."
+            f"Domain filter: {domain}"
         )
         out = await asyncio.wait_for(
             self.graph.ainvoke(
@@ -271,20 +268,12 @@ class ResearchAgent:
             top_k=max(6, needed + len(exclude)),
         )
         hits = res.get("results", []) if isinstance(res, dict) else []
-        candidates = dedupe_papers(
+        # no URL lookup here: see AGENT_TOOLS in config.py
+        return dedupe_papers(
             [Paper(title=h.get("filename", "")) for h in hits if isinstance(h, dict) and h.get("filename")],
             exclude=exclude,
             limit=needed,
         )
-
-        async def with_url(p: Paper) -> Paper:
-            try:
-                r = await self.call_tool("search_paper_url", title=p.title)
-                return Paper(title=p.title, url=r.get("url", "") if isinstance(r, dict) else "")
-            except Exception:
-                return p
-
-        return list(await asyncio.gather(*(with_url(p) for p in candidates)))
 
 
 if __name__ == "__main__":

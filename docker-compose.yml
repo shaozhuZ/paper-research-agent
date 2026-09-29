@@ -1,6 +1,6 @@
 # One-command local stack: Milvus (etcd + minio + standalone) and the four app services.
 #   cp .env.example .env   # add GOOGLE_API_KEY
-#   docker compose up -d --build
+#   docker compose up -d --build --wait   # --wait returns once every service is healthy
 # UI: http://localhost:8080   API: http://localhost:8000/docs   Milvus: localhost:19530
 
 x-app-env: &app-env
@@ -84,6 +84,12 @@ services:
     ports:
       - "9000:9000"
     restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
     depends_on:
       milvus:
         condition: service_healthy
@@ -102,8 +108,16 @@ services:
     ports:
       - "8000:8000"
     restart: on-failure
+    # healthy only once the agent has an MCP session (the same check as GET /ok)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json, sys, urllib.request; sys.exit(0 if json.load(urllib.request.urlopen('http://localhost:8000/ok', timeout=3)).get('mcp') else 1)"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
     depends_on:
-      - mcp-server
+      mcp-server:
+        condition: service_healthy
 
   streamlit:
     build: ./streamlit
@@ -112,7 +126,8 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      - mcp-host
+      mcp-host:
+        condition: service_healthy
 
 volumes:
   uploads:

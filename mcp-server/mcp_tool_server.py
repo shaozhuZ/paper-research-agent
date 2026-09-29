@@ -11,12 +11,20 @@ import requests as http_requests
 from fastmcp import FastMCP
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from pymilvus import MilvusClient
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse
 
 import retrieval
 from chunking import split_pdf
 
 #—FastMCP——
 mcp = FastMCP("Research Assistant Tools")
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health(request: Request) -> PlainTextResponse:
+    # for the compose healthcheck: the server is up and taking requests
+    return PlainTextResponse("ok")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("mcp-server")
 

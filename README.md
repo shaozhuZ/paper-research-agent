@@ -1,5 +1,7 @@
 # Paper Research Agent
 
+**English** | [中文](README.zh-CN.md)
+
 A question-answering agent over a collection of research papers, built with LangGraph, MCP and Milvus. You ask a question about the papers and get back an answer that sticks to what the papers say, the passages it was based on, and related papers from the collection.
 
 It started as a course project: a tool-calling agent that answered most questions but padded them with claims the sources didn't support. Most of the work since then has gone into measuring that properly and fixing it, with every change checked against a fixed question set.

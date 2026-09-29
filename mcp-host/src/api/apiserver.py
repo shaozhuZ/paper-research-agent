@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import time
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from agent.config import DOMAINS, settings
@@ -117,6 +119,31 @@ async def invoke(req: InvokeRequest, request: Request) -> InvokeResponse:
         # a short reason in the response, so eval logs show why a question failed
         raise HTTPException(status_code=502, detail=f"agent failed: {type(e).__name__}: {str(e)[:200]}")
     return InvokeResponse(**result)
+
+
+@app.post("/invoke/stream")
+async def invoke_stream(req: InvokeRequest, request: Request) -> StreamingResponse:
+    """Same as /invoke, as server-sent events: "delta" events with answer text as it is
+    written, then one "done" event carrying the full /invoke response (or an "error")."""
+    agent = _agent(request)
+
+    async def events():
+        try:
+            async for event in agent.stream(req.query, req.language, req.domain):
+                if event["type"] == "done":
+                    event = {"type": "done", "result": InvokeResponse(**event["result"]).model_dump()}
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except asyncio.TimeoutError:
+            yield f"data: {json.dumps({'type': 'error', 'detail': 'agent timed out'})}\n\n"
+        except Exception as e:
+            # headers are already sent, so the failure has to travel as an event
+            logger.exception("stream failed")
+            detail = f"agent failed: {type(e).__name__}: {str(e)[:200]}"
+            yield f"data: {json.dumps({'type': 'error', 'detail': detail}, ensure_ascii=False)}\n\n"
+
+    # no-cache / no buffering so proxies pass each event through as soon as it is written
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.post("/upload")

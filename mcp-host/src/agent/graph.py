@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, Any, AsyncIterator, TypedDict
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import END, StateGraph
@@ -21,6 +21,7 @@ from agent.llm import json_output, make_llm
 from agent.logging_setup import log_fields
 from agent.mcp_tools import MCPToolbox, ToolCallError
 from agent.parsing import (
+    AnswerStream,
     FinalAnswer,
     Paper,
     content_to_text,
@@ -285,21 +286,53 @@ class ResearchAgent:
     async def _run_fast(self, query: str, language: str, domain: str) -> dict[str, Any]:
         """Search once, answer with one model call. No tool loop, so no step limit to hit."""
         t0 = time.perf_counter()
+        hits, passages, messages = await self._fast_prompt(query, language, domain)
+        t_llm = time.perf_counter()
+        reply = await self.fast_llm.ainvoke(messages)
+        reply.response_metadata["latency_ms"] = round((time.perf_counter() - t_llm) * 1000)
+        return await self._fast_result(reply, hits, passages, query, language, domain, t0)
+
+    async def stream(self, query: str, language: str, domain: str) -> AsyncIterator[dict[str, Any]]:
+        """Like run(), but yields the answer text as the model writes it.
+
+        Events: {"type": "delta", "text": ...} while generating, then one
+        {"type": "done", "result": ...} with the same payload run() returns.
+        Only the fast path streams; loop mode sends just the final event.
+        """
+        if self.cfg.agent_mode != "fast":
+            yield {"type": "done", "result": await self.run(query, language, domain)}
+            return
+        async with asyncio.timeout(self.cfg.request_timeout_s):
+            t0 = time.perf_counter()
+            hits, passages, messages = await self._fast_prompt(query, language, domain)
+            t_llm = time.perf_counter()
+            extractor, reply = AnswerStream(), None
+            async for chunk in self.fast_llm.astream(messages):
+                reply = chunk if reply is None else reply + chunk
+                text = extractor.feed(content_to_text(chunk.content))
+                if text:
+                    yield {"type": "delta", "text": text}
+            if reply is None:
+                reply = AIMessage(content="")
+            reply.response_metadata["latency_ms"] = round((time.perf_counter() - t_llm) * 1000)
+            result = await self._fast_result(reply, hits, passages, query, language, domain, t0)
+        yield {"type": "done", "result": self._strip(result)}
+
+    async def _fast_prompt(self, query: str, language: str, domain: str) -> tuple[list, list, list]:
         res = await self.call_tool(
             "vector_search", query=query, domain=domain if domain in DOMAINS else "All",
             top_k=max(self.cfg.fast_search_k, self.cfg.fast_context_k),
         )
         hits = [h for h in (res.get("results", []) if isinstance(res, dict) else []) if isinstance(h, dict)]
         passages = hits[: self.cfg.fast_context_k]
-
         messages = [
             SystemMessage(content=FAST_PROMPT.format(language=language)),
             HumanMessage(content=f"Question: {query}\n\nPassages:\n\n{_format_passages(passages)}"),
         ]
-        t_llm = time.perf_counter()
-        reply = await self.fast_llm.ainvoke(messages)
-        reply.response_metadata["latency_ms"] = round((time.perf_counter() - t_llm) * 1000)
+        return hits, passages, messages
 
+    async def _fast_result(self, reply: AIMessage, hits: list, passages: list, query: str,
+                           language: str, domain: str, t0: float) -> dict[str, Any]:
         raw = content_to_text(reply.content)
         data = extract_json_object(raw) or {}
         answer = str(data.get("answer") or "").strip() or raw.strip()

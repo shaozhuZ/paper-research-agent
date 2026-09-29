@@ -1,3 +1,4 @@
+import json
 import os
 from collections import Counter
 
@@ -14,7 +15,7 @@ st.set_page_config(
 
 st.title("AI Research Assistant")
 st.caption(
-    "Multilingual RAG-based Academic Research Assistant · Powered by LangGraph + Milvus + Gemini"
+    "Answers questions from the indexed papers, quoting the passages it used · LangGraph + MCP + Milvus"
 )
 st.divider()
 
@@ -194,67 +195,86 @@ query_text = st.text_area(
     height=120,
 )
 
+def stream_events(payload: dict):
+    """Read server-sent events from /invoke/stream, one dict per event."""
+    with requests.post(f"{LANGGRAPH_API_BASE}/invoke/stream", json=payload, stream=True,
+                       timeout=(5, 300)) as resp:
+        resp.raise_for_status()
+        resp.encoding = "utf-8"
+        for line in resp.iter_lines(decode_unicode=True):
+            if line and line.startswith("data: "):
+                yield json.loads(line[len("data: "):])
+
+
 if st.button("Submit Query", use_container_width=True, type="primary"):
     if not query_text.strip():
         st.warning("Please enter a question.")
     else:
-        with st.spinner("Retrieving and generating answer..."):
-            try:
-                #This sends the user's query and selected options to the backend API for processing and response generation.
-                resp = requests.post(
-                    f"{LANGGRAPH_API_BASE}/invoke",
-                    json={
-                        "query": query_text.strip(),
-                        "language": language,
-                        "domain": query_domain,
-                    },
-                    timeout=600,
-                )
-                resp.raise_for_status()
+        st.session_state.last_result = None
+        st.divider()
+        st.subheader("Answer")
+        live = st.empty()
+        live.caption("Searching the papers...")
+        text, result = "", None
+        try:
+            payload = {"query": query_text.strip(), "language": language, "domain": query_domain}
+            for event in stream_events(payload):
+                if event["type"] == "delta":
+                    text += event["text"]
+                    live.info(text + " ▌")
+                elif event["type"] == "done":
+                    result = event["result"]
+                elif event["type"] == "error":
+                    st.error(event.get("detail", "The agent failed."))
+        except requests.exceptions.ConnectionError:
+            st.error("Cannot connect to backend.")
+        except requests.exceptions.Timeout:
+            st.error("Request timed out.")
+        except Exception as e:
+            st.error(f"An error occurred: {e}")
 
-                result = resp.json()
-                # store result
-                st.session_state.last_result = {
-                    "answer": result.get("answer", "(No answer received)"),
-                    "papers": result.get("papers", []),
-                    "recommended_papers": result.get("recommended_papers", []),
-                    "language": result.get("language", language),
-                }
+        if result is not None:
+            st.session_state.last_result = result
+            st.rerun()  # redraw with the full result (sources, passages) below
 
-            except requests.exceptions.ConnectionError:
-                st.error("Cannot connect to backend.")
-            except requests.exceptions.Timeout:
-                st.error("Request timed out.")
-            except Exception as e:
-                st.error(f"An error occurred: {e}")
+
+def show_papers(title: str, papers: list) -> None:
+    if not papers:
+        return
+    st.subheader(title)
+    for paper in papers[:2]:
+        with st.container(border=True):
+            st.markdown(f"**{paper.get('title', 'Unknown title')}**")
+            if paper.get("url"):
+                st.markdown(f"[{paper['url']}]({paper['url']})")
 
 
 # Render Result
 if st.session_state.last_result:
     res = st.session_state.last_result
+    usage = res.get("usage") or {}
 
     st.divider()
-    st.caption(f"Response language: {res['language']}")
-
     st.subheader("Answer")
-    st.info(res["answer"])
-    # reference paper
-    if res["papers"]:
-        st.subheader("Reference Papers")
-        for i, paper in enumerate(res["papers"][:2], 1):
-            with st.container(border=True):
-                st.markdown(f"**Paper {i}: {paper.get('title', 'Unknown title')}**")
-                url = paper.get("url", "#")
-                st.markdown(f"[{url}]({url})")
-    else:
-        st.info("No reference papers returned.")
-    # recommended_papers
-    if res["recommended_papers"]:
-        st.subheader("Recommended Papers")
-        for i, paper in enumerate(res["recommended_papers"][:2], 1):
-            with st.container(border=True):
-                st.markdown(f"**Paper {i}: {paper.get('title', 'Unknown title')}**")
-                url = paper.get("url", "#")
-                st.markdown(f"[{url}]({url})")
-    else:
-        st.info("No recommended papers returned.")
+    st.info(res.get("answer") or "(No answer received)")
+    meta = [f"{usage['latency_ms'] / 1000:.1f} s" if usage.get("latency_ms") else "",
+            f"{usage.get('llm_turns', 0)} model call(s)" if usage else "",
+            usage.get("model", ""), f"answer in {res.get('language', language)}"]
+    st.caption(" · ".join(m for m in meta if m))
+
+    # the passages the answer is based on, so the reader can check it
+    contexts = res.get("contexts") or []
+    cited = [n for n in usage.get("cited", []) if 1 <= n <= len(contexts)]
+    if contexts:
+        st.subheader("Passages used")
+        order = cited or list(range(1, len(contexts) + 1))
+        for n in order:
+            c = contexts[n - 1]
+            with st.expander(f"[{n}] {c['filename']} · chunk {c['chunk_id']}", expanded=(n == order[0])):
+                st.write(c["content"])
+        others = len(contexts) - len(order)
+        if others > 0:
+            st.caption(f"{others} more passage(s) were retrieved but not cited.")
+
+    show_papers("Reference Papers", res.get("papers", []))
+    show_papers("Recommended Papers", res.get("recommended_papers", []))

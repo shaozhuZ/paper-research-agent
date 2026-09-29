@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
 from agent.config import settings
 from agent.graph import ResearchAgent
@@ -282,3 +282,42 @@ async def test_loop_tool_call_has_a_time_limit(server):
             await asyncio.wait_for(agent.run("What is distillation?", "English", "AI"), timeout=4)
     finally:
         await agent.close()
+
+
+class StreamingLLM(ScriptedLLM):
+    """Scripted model that streams each reply a few characters at a time."""
+
+    def _stream(self, messages, stop=None, run_manager=None, **kwargs):
+        text = self.script.pop(0).content
+        for i in range(0, len(text), 4):
+            yield ChatGenerationChunk(message=AIMessageChunk(content=text[i:i + 4]))
+
+
+async def test_fast_mode_streams_answer_text(server):
+    llm = StreamingLLM(script=[AIMessage(content='{"answer": "Soft targets from a large model.", "sources": [2]}')])
+    cfg = replace(_cfg(server["port"]), agent_mode="fast", fast_context_k=3, fast_search_k=4)
+    agent = await ResearchAgent.create(cfg, llm=llm)
+    try:
+        events = [e async for e in agent.stream("What is distillation?", "English", "AI")]
+    finally:
+        await agent.close()
+    deltas = [e["text"] for e in events if e["type"] == "delta"]
+    assert len(deltas) > 3  # arrived in pieces, not all at the end
+    assert "".join(deltas) == "Soft targets from a large model."  # no JSON leaked into the text
+    assert [e["type"] for e in events][-1] == "done"
+    result = events[-1]["result"]
+    assert result["answer"] == "Soft targets from a large model."
+    assert [p["title"] for p in result["papers"]] == ["specdec.pdf"]
+    assert result["usage"]["cited"] == [2] and result["usage"]["llm_turns"] == 1
+    assert not any(k.startswith("_") for k in result)
+
+
+async def test_loop_mode_stream_sends_only_the_final_result(server):
+    agent = await ResearchAgent.create(_cfg(server["port"]), llm=ScriptedLLM(script=_script()))
+    try:
+        events = [e async for e in agent.stream("What is distillation?", "English", "AI")]
+    finally:
+        await agent.close()
+    assert [e["type"] for e in events] == ["done"]
+    assert events[0]["result"]["answer"].startswith("Distillation")
+    assert not any(k.startswith("_") for k in events[0]["result"])

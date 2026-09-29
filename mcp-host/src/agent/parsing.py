@@ -5,6 +5,7 @@ Nothing in here touches the network, which keeps it cheap to unit test.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -111,3 +112,56 @@ def dedupe_papers(papers: list[Paper], exclude: set[str] | None = None, limit: i
         if limit is not None and len(out) >= limit:
             break
     return out
+
+
+_ANSWER_START = re.compile(r'"answer"\s*:\s*"')
+
+
+class AnswerStream:
+    """Pulls the "answer" string out of a JSON reply while the model is still writing it.
+
+    The fast path asks for {"answer": ..., "sources": [...]}. Streaming the raw tokens
+    would show JSON to the user, so this keeps the part of the answer string that is
+    complete so far and hands back only what is new on each feed().
+    """
+
+    def __init__(self) -> None:
+        self._buf = ""
+        self._sent = 0
+
+    def feed(self, text: str) -> str:
+        self._buf += text
+        current = _partial_json_string(self._buf)
+        new = current[self._sent:]
+        self._sent = len(current)
+        return new
+
+
+def _partial_json_string(buf: str) -> str:
+    m = _ANSWER_START.search(buf)
+    if not m:
+        return ""
+    i, end = m.end(), len(buf)
+    safe = i  # everything before this index is a complete piece of the string
+    while i < end:
+        c = buf[i]
+        if c == '"':
+            break
+        if c == "\\":
+            # an escape is only usable once all of it has arrived (\n is 2 chars, \uXXXX is 6)
+            need = 6 if buf[i + 1:i + 2] == "u" else 2
+            if i + need > end:
+                break
+            i += need
+        else:
+            i += 1
+        safe = i
+    raw = buf[m.end():safe]
+    try:
+        text = json.loads(f'"{raw}"')
+    except json.JSONDecodeError:
+        return raw
+    # half of a surrogate pair (e.g. an emoji cut between its two \u escapes): wait for the rest
+    if text and "\ud800" <= text[-1] <= "\udbff":
+        text = text[:-1]
+    return text

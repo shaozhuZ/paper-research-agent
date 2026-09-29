@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -34,6 +36,14 @@ class FakeAgent:
             "recommended_papers": [],
             "language": language,
         }
+
+    async def stream(self, query, language, domain):
+        if query == "boom":
+            yield {"type": "delta", "text": "partial"}
+            raise RuntimeError("model connection reset")
+        for piece in ("Hel", "lo"):
+            yield {"type": "delta", "text": piece}
+        yield {"type": "done", "result": {"answer": "Hello", "papers": [], "language": language, "_private": 1}}
 
     async def close(self):
         pass
@@ -86,3 +96,24 @@ def test_invoke_failure_reports_reason(client):
     r = client.post("/invoke", json={"query": "boom", "domain": "AI"})
     assert r.status_code == 502
     assert r.json()["detail"] == "agent failed: RuntimeError: vector_search failed: 503 from embedding API"
+
+
+def _events(resp):
+    return [json.loads(line[len("data: "):]) for line in resp.text.splitlines() if line.startswith("data: ")]
+
+
+def test_invoke_stream_sends_deltas_then_result(client):
+    r = client.post("/invoke/stream", json={"query": "q", "domain": "AI"})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
+    events = _events(r)
+    assert [e["type"] for e in events] == ["delta", "delta", "done"]
+    assert "".join(e["text"] for e in events[:2]) == "Hello"
+    # the final event has the /invoke response shape (defaults filled, private keys dropped)
+    assert events[-1]["result"]["answer"] == "Hello"
+    assert events[-1]["result"]["contexts"] == [] and "_private" not in events[-1]["result"]
+
+
+def test_invoke_stream_reports_errors_as_an_event(client):
+    events = _events(client.post("/invoke/stream", json={"query": "boom", "domain": "AI"}))
+    assert [e["type"] for e in events] == ["delta", "error"]
+    assert events[-1]["detail"] == "agent failed: RuntimeError: model connection reset"

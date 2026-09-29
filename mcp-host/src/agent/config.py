@@ -17,6 +17,12 @@ class Settings:
     # Hard ceiling on llm<->tools round trips so a confused model can't loop forever.
     recursion_limit: int = int(os.getenv("AGENT_RECURSION_LIMIT", "25"))
     request_timeout_s: float = float(os.getenv("AGENT_TIMEOUT_S", "120"))
+    # "loop": the model decides when and how often to search (tool-calling loop).
+    # "fast": search once in code, then a single model call writes the answer.
+    agent_mode: str = os.getenv("AGENT_MODE", "loop")
+    # fast mode: how many passages the model sees; extra hits only feed recommendations
+    fast_context_k: int = int(os.getenv("FAST_CONTEXT_K", "5"))
+    fast_search_k: int = int(os.getenv("FAST_SEARCH_K", "10"))
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
 

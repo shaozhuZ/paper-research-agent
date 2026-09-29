@@ -147,7 +147,8 @@ def summarize(rows: list[dict], total: int) -> None:
     tool_calls = sum(len(u.get("tool_calls", [])) for u in used) / n
     llm_share = sum(u.get("llm_ms", 0) for u in used) / max(1, sum(u.get("latency_ms", 0) for u in used))
     models = sorted({u.get("model", "google:gemini-3-flash-preview") for u in used})
-    print(f"per question (n={n}, model {', '.join(models)}):")
+    modes = sorted({u.get("mode", "loop") for u in used})
+    print(f"per question (n={n}, model {', '.join(models)}, mode {', '.join(modes)}):")
     print(f"  llm turns {avg('llm_turns'):.1f}   tool calls {tool_calls:.1f}")
     print(f"  tokens in {avg('input_tokens'):,.0f} (cached {avg('cached_tokens'):,.0f})"
           f"   out {avg('output_tokens'):,.0f}   of which reasoning {avg('reasoning_tokens'):,.0f}")

@@ -122,6 +122,41 @@ async def test_agent_run_with_fallback(server):
     assert [c["filename"] for c in out["contexts"]] == ["distill.pdf", "specdec.pdf", "paged.pdf", "effnet.pdf"]
 
 
+async def test_fast_mode_single_call(server):
+    # fake vector_search returns distill, specdec, paged, effnet in that order
+    reply = AIMessage(content='```json\n{"answer": "Soft targets from a large model.", "sources": [2, 1, 9]}\n```')
+    llm = ScriptedLLM(script=[reply])
+    cfg = replace(_cfg(server["port"]), agent_mode="fast", fast_context_k=3, fast_search_k=4)
+    agent = await ResearchAgent.create(cfg, llm=llm)
+    try:
+        out = await agent.run("What is distillation?", "English", "AI")
+    finally:
+        await agent.close()
+    assert out["answer"] == "Soft targets from a large model."
+    assert llm.script == []  # exactly one model call
+    # sources follow the cited passages (9 is out of range and ignored)
+    assert [p["title"] for p in out["papers"]] == ["specdec.pdf", "distill.pdf"]
+    # recommendations come from the other search hits, never from the model
+    assert [p["title"] for p in out["recommended_papers"]] == ["paged.pdf", "effnet.pdf"]
+    # the model only saw the first fast_context_k passages
+    assert [c["filename"] for c in out["contexts"]] == ["distill.pdf", "specdec.pdf", "paged.pdf"]
+    assert out["usage"]["llm_turns"] == 1 and out["usage"]["tool_calls"] == ["vector_search"]
+    assert out["usage"]["mode"] == "fast" and out["usage"]["cited"] == [2, 1]
+
+
+async def test_fast_mode_plain_text_reply(server):
+    # a model that ignores the JSON instruction still produces an answer
+    llm = ScriptedLLM(script=[AIMessage(content="Distillation trains a small model.")])
+    cfg = replace(_cfg(server["port"]), agent_mode="fast", fast_context_k=2, fast_search_k=4)
+    agent = await ResearchAgent.create(cfg, llm=llm)
+    try:
+        out = await agent.run("What is distillation?", "English", "AI")
+    finally:
+        await agent.close()
+    assert out["answer"] == "Distillation trains a small model."
+    assert [p["title"] for p in out["papers"]] == ["distill.pdf", "specdec.pdf"]
+
+
 async def test_agent_recovers_after_tool_server_restart(server):
     llm = ScriptedLLM(script=_script())
     agent = await ResearchAgent.create(_cfg(server["port"]), llm=llm)

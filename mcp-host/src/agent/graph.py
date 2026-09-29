@@ -15,6 +15,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
+from langsmith import traceable
 
 from agent.config import AGENT_TOOLS, DOMAINS, RETRYABLE_TOOLS, Settings, settings as default_settings
 from agent.llm import json_output, make_llm
@@ -108,6 +109,16 @@ def _distinct_papers(filenames: list[str], exclude: set[str] = frozenset(), limi
         if len(out) == limit:
             break
     return out
+
+
+def _trace_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+    # keep the agent object itself out of the trace
+    return {k: v for k, v in inputs.items() if k != "self"}
+
+
+def _final_event(events: list[dict[str, Any]]) -> Any:
+    # a streamed run is recorded with its final result, not every text delta
+    return events[-1].get("result") if events else None
 
 
 class AgentState(TypedDict):
@@ -283,6 +294,9 @@ class ResearchAgent:
             result = await self._run_once(query, language, domain)
         return self._strip(result)
 
+    # With LANGSMITH_TRACING=true each request shows up as one tree: the search and the
+    # model call nested under it, with their timings. Without it these are no-ops.
+    @traceable(name="fast_answer", process_inputs=_trace_inputs)
     async def _run_fast(self, query: str, language: str, domain: str) -> dict[str, Any]:
         """Search once, answer with one model call. No tool loop, so no step limit to hit."""
         t0 = time.perf_counter()
@@ -292,6 +306,7 @@ class ResearchAgent:
         reply.response_metadata["latency_ms"] = round((time.perf_counter() - t_llm) * 1000)
         return await self._fast_result(reply, hits, passages, query, language, domain, t0)
 
+    @traceable(name="fast_answer", process_inputs=_trace_inputs, reduce_fn=_final_event)
     async def stream(self, query: str, language: str, domain: str) -> AsyncIterator[dict[str, Any]]:
         """Like run(), but yields the answer text as the model writes it.
 
@@ -318,11 +333,13 @@ class ResearchAgent:
             result = await self._fast_result(reply, hits, passages, query, language, domain, t0)
         yield {"type": "done", "result": self._strip(result)}
 
+    @traceable(run_type="tool", name="vector_search", process_inputs=_trace_inputs)
+    async def _search(self, query: str, domain: str, top_k: int) -> Any:
+        return await self.call_tool("vector_search", query=query, domain=domain, top_k=top_k)
+
     async def _fast_prompt(self, query: str, language: str, domain: str) -> tuple[list, list, list]:
-        res = await self.call_tool(
-            "vector_search", query=query, domain=domain if domain in DOMAINS else "All",
-            top_k=max(self.cfg.fast_search_k, self.cfg.fast_context_k),
-        )
+        res = await self._search(query, domain if domain in DOMAINS else "All",
+                                 max(self.cfg.fast_search_k, self.cfg.fast_context_k))
         hits = [h for h in (res.get("results", []) if isinstance(res, dict) else []) if isinstance(h, dict)]
         passages = hits[: self.cfg.fast_context_k]
         messages = [

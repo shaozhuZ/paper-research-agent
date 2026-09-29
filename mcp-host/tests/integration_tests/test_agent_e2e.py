@@ -10,11 +10,14 @@ import sys
 import time
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import MagicMock
 
+import langsmith
 import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from langsmith.run_helpers import tracing_context
 
 from agent.config import settings
 from agent.graph import ResearchAgent
@@ -321,3 +324,29 @@ async def test_loop_mode_stream_sends_only_the_final_result(server):
     assert [e["type"] for e in events] == ["done"]
     assert events[0]["result"]["answer"].startswith("Distillation")
     assert not any(k.startswith("_") for k in events[0]["result"])
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_fast_path_is_traced_as_one_tree(server, streamed):
+    # a stand-in LangSmith client that records runs instead of sending them
+    client = MagicMock(spec=langsmith.Client)
+    reply = AIMessage(content='{"answer": "Soft targets.", "sources": [1]}')
+    cfg = replace(_cfg(server["port"]), agent_mode="fast")
+    agent = await ResearchAgent.create(cfg, llm=StreamingLLM(script=[reply]))
+    try:
+        with tracing_context(enabled=True, client=client, project_name="test"):
+            if streamed:
+                [e async for e in agent.stream("What is distillation?", "English", "AI")]
+            else:
+                await agent.run("What is distillation?", "English", "AI")
+    finally:
+        await agent.close()
+    runs = [c.kwargs for c in client.create_run.call_args_list]
+    root = next(r for r in runs if not r.get("parent_run_id"))
+    children = [(r["name"], r["run_type"]) for r in runs if r.get("parent_run_id") == root["id"]]
+    assert root["name"] == "fast_answer"
+    assert root["inputs"] == {"query": "What is distillation?", "language": "English", "domain": "AI"}
+    assert children == [("vector_search", "tool"), ("StreamingLLM", "llm")]
+    # the root run ends with the answer, not with a list of streamed deltas
+    outputs = [c.kwargs.get("outputs") for c in client.update_run.call_args_list if c.kwargs.get("run_id") == root["id"]]
+    assert outputs and outputs[-1]["answer"] == "Soft targets."

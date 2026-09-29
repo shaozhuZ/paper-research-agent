@@ -4,6 +4,12 @@ The chunk a question was written from becomes its gold chunk. The prompt
 lives in eval/prompts/ so it can be edited without touching this file.
 
     python eval/generate_questions.py --n 60 --out eval/questions_draft.jsonl
+
+For a held-out set, pass the existing question files to --exclude so no new
+question is written from a chunk (or a neighbouring chunk) they already use:
+
+    python eval/generate_questions.py --n 66 --seed 29 --id-prefix h \
+        --exclude eval/questions_single_hop.jsonl --out eval/questions_heldout.jsonl
 """
 from __future__ import annotations
 
@@ -50,6 +56,22 @@ def load_chunks(path: Path) -> list[dict]:
         return [json.loads(line) for line in fh]
 
 
+def used_chunks(paths: list[str], margin: int = 1) -> set[tuple[str, int]]:
+    """Gold chunks of existing questions, widened by `margin` on each side.
+
+    Neighbours count as used because chunks overlap by 120 characters, so a
+    question from the next chunk can have the same answer.
+    """
+    used = set()
+    for path in paths:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                for g in json.loads(line)["gold_chunks"]:
+                    for d in range(-margin, margin + 1):
+                        used.add((g["filename"], g["chunk_id"] + d))
+    return used
+
+
 def sample_by_domain(chunks: list[dict], n: int, seed: int) -> list[dict]:
     """Take roughly n/3 chunks from each domain so one domain can't dominate."""
     rng = random.Random(seed)
@@ -83,11 +105,19 @@ def main() -> None:
     ap.add_argument("--n", type=int, default=60)
     ap.add_argument("--seed", type=int, default=13)
     ap.add_argument("--model", default=DEFAULT_EVAL_MODEL, help="provider:model")
+    ap.add_argument("--exclude", nargs="*", default=[], help="question files whose gold chunks (and neighbours) are off limits")
+    ap.add_argument("--id-prefix", default="q", help="use a different prefix for a held-out set so ids never clash")
     args = ap.parse_args()
 
     template = Path(args.prompt).read_text(encoding="utf-8")
     llm = get_llm(args.model, temperature=0.4)
-    picked = sample_by_domain(load_chunks(Path(args.chunks)), args.n, args.seed)
+    chunks = load_chunks(Path(args.chunks))
+    if args.exclude:
+        used = used_chunks(args.exclude)
+        before = len(chunks)
+        chunks = [c for c in chunks if (c["filename"], c["chunk_id"]) not in used]
+        print(f"excluded {before - len(chunks)} chunks already used by {', '.join(args.exclude)}")
+    picked = sample_by_domain(chunks, args.n, args.seed)
 
     kept = skipped = failed = 0
     with open(args.out, "w", encoding="utf-8") as out:
@@ -115,7 +145,7 @@ def main() -> None:
                 print(f"[{i}] dropped, copies passage: '{copied}'")
                 continue
             item = {
-                "id": f"q{kept + 1:03d}",
+                "id": f"{args.id_prefix}{kept + 1:03d}",
                 "question": obj["question"],
                 "type": "single_hop",
                 "domain": chunk["domain"],

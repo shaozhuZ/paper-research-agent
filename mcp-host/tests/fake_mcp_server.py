@@ -1,5 +1,6 @@
 """Tiny stand-in for mcp-server with the same tool names. Used by integration tests."""
 import sys
+import time
 
 from fastmcp import FastMCP
 
@@ -7,11 +8,13 @@ mcp = FastMCP("fake-research-tools")
 CORPUS = ["distill.pdf", "specdec.pdf", "paged.pdf", "effnet.pdf"]
 
 # error injection for tests: a "flaky:" key fails on its first call only,
-# a "broken:" key fails every time
+# a "broken:" key fails every time, a "slow:" key takes 5 s to answer
 _seen: set[str] = set()
 
 
 def _maybe_fail(key: str) -> None:
+    if key.startswith("slow:"):
+        time.sleep(5)
     if key.startswith("broken:"):
         raise ValueError(f"upstream unavailable for {key}")
     if key.startswith("flaky:") and key not in _seen:

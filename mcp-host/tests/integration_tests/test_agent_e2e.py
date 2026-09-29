@@ -18,7 +18,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 
 from agent.config import settings
 from agent.graph import ResearchAgent
-from agent.mcp_tools import MCPToolbox, ToolCallError
+from agent.mcp_tools import MCPToolbox, ToolCallError, ToolTimeout
 
 pytestmark = pytest.mark.anyio
 SERVER = Path(__file__).resolve().parents[1] / "fake_mcp_server.py"
@@ -239,3 +239,46 @@ async def test_fast_mode_survives_flaky_search(server):
         await agent.close()
     assert out["answer"] == "Soft targets."
     assert [c["filename"] for c in out["contexts"]] == ["distill.pdf", "specdec.pdf"]
+
+
+async def test_loop_reconnects_while_server_is_starting(server):
+    # the real case: `docker compose up -d mcp-server` and a request arrives
+    # before the new server is listening
+    llm = ScriptedLLM(script=_script())
+    agent = await ResearchAgent.create(_cfg(server["port"]), llm=llm)
+    agent.reconnect_delays_s = (0.5, 1.0, 2.0)
+    try:
+        server["proc"].kill()
+        server["proc"].wait()
+        server["proc"] = subprocess.Popen([sys.executable, str(SERVER), str(server["port"])],
+                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        out = await asyncio.wait_for(agent.run("What is distillation?", "English", "AI"), timeout=20)
+        assert [p["title"] for p in out["papers"]] == ["distill.pdf", "specdec.pdf"]
+    finally:
+        await agent.close()
+
+
+async def test_loop_fails_fast_when_server_is_down(server):
+    agent = await ResearchAgent.create(_cfg(server["port"]), llm=ScriptedLLM(script=_script()))
+    agent.reconnect_delays_s = (0.1,)
+    try:
+        server["proc"].kill()
+        server["proc"].wait()
+        t0 = time.perf_counter()
+        # an error within seconds, not a hang until the request timeout
+        with pytest.raises(Exception):
+            await asyncio.wait_for(agent.run("What is distillation?", "English", "AI"), timeout=20)
+        assert time.perf_counter() - t0 < 15
+    finally:
+        await agent.close()
+
+
+async def test_loop_tool_call_has_a_time_limit(server):
+    script = [_tool_call("vector_search", {"query": "slow:distillation", "domain": "AI", "top_k": 4}, 1)]
+    agent = await ResearchAgent.create(_cfg(server["port"]), llm=ScriptedLLM(script=script))
+    agent.toolbox.call_timeout_s = 0.5
+    try:
+        with pytest.raises(ToolTimeout, match="vector_search got no reply"):
+            await asyncio.wait_for(agent.run("What is distillation?", "English", "AI"), timeout=4)
+    finally:
+        await agent.close()

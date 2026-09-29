@@ -180,6 +180,8 @@ class ResearchAgent:
 
     # pause before retrying a read-only tool that reported an error
     tool_retry_delay_s: float = 1.0
+    # waits between reconnect attempts while the tool server is coming back up
+    reconnect_delays_s: tuple[float, ...] = (1.0, 2.0, 4.0)
 
     def __init__(self, cfg: Settings, llm: Any, toolbox: MCPToolbox) -> None:
         self.cfg = cfg
@@ -206,11 +208,26 @@ class ResearchAgent:
             if await self.toolbox.healthy():
                 return  # another request already reconnected
             old = self.toolbox
-            fresh = MCPToolbox(self.cfg.mcp_tool_url)
-            await fresh.start()
+            fresh = await self._open_toolbox()
             self.toolbox = fresh
             self.graph = build_graph(self.llm, fresh.langchain_tools(AGENT_TOOLS))
             await old.close()
+
+    async def _open_toolbox(self) -> MCPToolbox:
+        # right after a restart the tool server may still be starting up, so give it
+        # a few seconds before giving up
+        for delay in (*self.reconnect_delays_s, None):
+            fresh = MCPToolbox(self.cfg.mcp_tool_url)
+            try:
+                await fresh.start()
+                return fresh
+            except Exception as e:
+                await fresh.close()
+                if delay is None:
+                    raise
+                logger.warning("MCP reconnect failed (%r), trying again in %gs", e, delay)
+                await asyncio.sleep(delay)
+        raise AssertionError("unreachable")
 
     async def call_tool(self, name: str, **arguments: Any) -> Any:
         """Direct tool call (no LLM) that survives a dropped MCP session."""
@@ -240,6 +257,12 @@ class ResearchAgent:
             return self._strip(await asyncio.wait_for(
                 self._run_fast(query, language, domain), timeout=self.cfg.request_timeout_s
             ))
+        # The graph's tools are bound to the current session. If the tool server
+        # restarted since the last request, calls on the old session hang instead of
+        # failing, so check first (the fast path does the same in call_tool).
+        if not await self.toolbox.healthy():
+            logger.warning("MCP session is down before the run, reconnecting")
+            await self.reconnect()
         try:
             result = await self._run_once(query, language, domain)
         except asyncio.TimeoutError:

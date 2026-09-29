@@ -25,6 +25,10 @@ class ToolCallError(RuntimeError):
     pass
 
 
+class ToolTimeout(RuntimeError):
+    """A tool call got no reply in time, usually because the session died under it."""
+
+
 class MCPToolbox:
     def __init__(self, url: str, call_timeout_s: float = 60.0) -> None:
         self.url = url
@@ -48,7 +52,8 @@ class MCPToolbox:
             try:
                 async with client.session(SERVER) as session:
                     self._session = session
-                    self._tools = {t.name: t for t in await load_mcp_tools(session)}
+                    tools = await load_mcp_tools(session, tool_interceptors=[self._with_timeout])
+                    self._tools = {t.name: t for t in tools}
                     ready.set_result(None)
                     await self._stop.wait()
             except BaseException as e:  # includes the session dying under us
@@ -71,6 +76,16 @@ class MCPToolbox:
                 await asyncio.wait_for(owner, timeout=5)
             except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
                 owner.cancel()
+
+    async def _with_timeout(self, request: Any, handler: Any) -> Any:
+        # Calls the LLM makes through the graph. On a dead session they never get a
+        # reply and never raise, so without a limit the request just hangs until
+        # the overall timeout. ToolTimeout is not a TimeoutError on purpose: the
+        # caller treats it like any other session failure and reconnects.
+        try:
+            return await asyncio.wait_for(handler(request), timeout=self.call_timeout_s)
+        except asyncio.TimeoutError:
+            raise ToolTimeout(f"{request.name} got no reply in {self.call_timeout_s:g}s") from None
 
     async def healthy(self, timeout_s: float = 3.0) -> bool:
         if self._session is None:

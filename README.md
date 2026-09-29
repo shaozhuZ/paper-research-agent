@@ -31,7 +31,7 @@ This project implements a multilingual, AI-powered academic research assistant t
 - A **translation microservice** (English ↔ Spanish ↔ French ↔ Italian)
 - A **Streamlit web application** for paper upload and interactive querying
 
-Users can upload research PDFs, classify them by domain (AI / Security / Other), and ask questions in any of four supported languages. The system retrieves relevant context from indexed papers, generates a grounded answer using Google Gemini, and returns the response — along with two reference papers and two recommended papers — in the same language as the query.
+Users can upload research PDFs, classify them by domain (AI / Security / Other), and ask questions in any of four supported languages. The system retrieves relevant context from indexed papers, generates a grounded answer with the configured chat model (GPT-6 Luna in the evaluated setup), and returns the response — along with two reference papers and two recommended papers — in the same language as the query.
 
 ---
 
@@ -105,6 +105,73 @@ Loops are not tied to specific questions: two runs at the same step limit failed
 
 v1 was lenient in 11 of 12 disagreements; v2 fixed correctness but overshoots on faithfulness (strict in 6 of 7). v2 is the judge of record because its aggregate rates are closest to the human labels (human: 20% pass, 70% unfaithful on the sample). The prompt was tuned on these same 20 answers, so agreement is optimistic until checked on a held-out set.
 
+### After the baseline
+
+Every row is a full run over the same 104 questions, graded by the same v2 judge. Runs are noisy: the agent and the judge are both sampled, and at around 60% a gap between two 104-question runs needs to be roughly 13 points before it is clearly more than noise. Where it matters, configurations are compared question by question instead.
+
+| Run | Change | Correct & faithful | Unfaithful (of answered) | Latency p50 / p95 | Cost / question |
+|---|---|---:|---:|---:|---:|
+| v0 | baseline: Gemini 3 Flash, tool loop, URL lookup | 16% | 82% | 30.0 s / 100.7 s | ~$0.02 |
+| luna_base | chat model switched to GPT-6 Luna | 53.8% | 35.6% | 30.5 s / 56.8 s | $0.0017 |
+| nolink | URL lookup taken out of the loop | 62.5% | 26.9% | 12.2 s / 17.4 s | $0.0011 |
+| rerank | vector_search uses dense + rerank | 56.7% | 28.8% | 13.7 s / 22.4 s | $0.0011 |
+| fast | one search, one model call | 62.5% | 5.8% | 2.9 s / 4.7 s | $0.0002 |
+| fast2 | prompt asks for complete answers | 73.1% | 9.7% | 3.1 s / 5.0 s | $0.0002 |
+| fast3 | strict JSON schema on the reply | **76.9%** | **6.7%** | **3.1 s / 5.9 s** | **$0.0002** |
+
+#### Model and latency
+
+The Gemini 3 Flash preview kept returning 503s under load, and every failed call cost ~30 s before timing out. On the first 20 questions GPT-6 Luna was no worse on quality, never hit the step limit, and cost about 1/8 as much per question. On the full set it answered all 104 questions (Gemini missed 11).
+
+`/invoke` returns per-request usage (LLM turns, tool calls, input / cached / output / reasoning tokens, time spent in the model), and `run_agent.py` aggregates it. That breakdown showed ~15 s of each answer going to paper URL lookups: Semantic Scholar rate-limited almost every call and the retries slept. The recommended papers the model looked up were also almost never in the index. Taking the lookup out of the loop cut p50 from 30.5 s to 12.2 s and p95 from 56.8 s to 17.4 s, and LLM turns per question from 5.7 to 3.7. The quality change (53.8% → 62.5%) is within noise.
+
+#### Retrieval: hybrid search and reranking
+
+The chunks were migrated to a new collection with a BM25 sparse field next to the dense vector (Milvus computes BM25 from the text on insert), reusing the stored embeddings. Before comparing anything, dense search on the new collection reproduced the baseline exactly.
+
+| | Dense | BM25 | Hybrid (RRF) | Dense + rerank | Hybrid + rerank |
+|---|---:|---:|---:|---:|---:|
+| Recall@1 | 0.625 | 0.519 | 0.635 | **0.865** | 0.856 |
+| Recall@3 | 0.827 | 0.731 | 0.808 | 0.942 | 0.933 |
+| Recall@5 | 0.913 | 0.798 | 0.846 | 0.962 | 0.962 |
+| Recall@10 | 0.933 | 0.875 | 0.923 | 0.971 | 0.971 |
+| MRR | 0.736 | 0.638 | 0.734 | **0.905** | 0.899 |
+| Search p50 | 233 ms | | 206 ms | 506 ms | 500 ms |
+
+Hybrid uses RRF (k = 60) over 50 candidates from each side; rerank is Voyage `rerank-3` over the top 30 first-stage hits.
+
+- Equal-weight RRF barely moved Recall@1 and cost 7 points of Recall@5. BM25 is weak on these questions because the generator was told to paraphrase, which removes exact terms. RRF weights were not tuned, since the only data to tune them on is the test set.
+- The gold chunk was in the top 10 of dense or BM25 for 101 of 104 questions, so candidates were fine and ordering was the problem. A cross-encoder reranker fixed 25 questions at rank 1 and broke none. After reranking BM25 added nothing, so it was dropped; the code stays for the ablation.
+- If the reranker API fails, search falls back to first-stage order. The eval script aborts in that case so a table never mixes reranked and un-reranked results.
+
+Better ranking did not change the loop agent's answers (56.7% vs 62.5%, within noise). The agent searches two or three times and reads 12–13 passages per question, so even without reranking it had seen the gold chunk on 97 of 104 questions. Reranking moved the gold chunk to the first passage it saw on 88 questions instead of 64, but the answer was written after reading all of them anyway. Generation was still the bottleneck.
+
+#### Fast path: one search, one model call
+
+With `AGENT_MODE=fast`, code calls `vector_search` once (dense + rerank, top 10). The model gets the top 5 as numbered passages, makes one call with no tools, and returns `{"answer", "sources"}`. Source papers come from the cited passages and recommendations from the other search hits, so every paper returned is in the index. The prompt carries the same faithfulness rule the judge uses: no purposes, consequences or importance the passages don't state.
+
+- **fast.** Unfaithful answers dropped from 28.8% to 5.8%, but full-marks answers fell from 82 to 67. All 37 partially correct answers had the gold passage in context. Answers had gotten half as long (median 78 → 32 words): "keep it concise" combined with strict grounding made the model stop after the first fact that fit.
+- **fast2.** The prompt now asks for every detail in the passages that bears on the question, with grounding taking precedence. Full marks went back to 83 (19 questions up, 1 down).
+- **fast3.** fast2 produced 13 malformed replies, where the model wrote the answer as plain text followed by a separate `{"sources": [...]}`. The fast path now uses OpenAI structured outputs with a strict JSON schema, so the reply always parses: 0 malformed, and no passage numbers leaking into the text. The score change (76 → 80 questions, 7 up and 3 down) is noise; the point is that callers always get a clean answer and source list.
+
+Against the loop agent, the fast path is 20 points higher on correct & faithful, about 4x faster and about 1/5 the cost. The fast path changed the structure and the prompt together, so the gain can't be split between the two.
+
+#### Held-out check
+
+The fast-path prompt was revised after reading failures on these 104 questions, so the numbers above are optimistic. To check, 44 new questions were generated (`eval/questions_heldout.jsonl`) from chunks that neither the dev set's gold chunks nor their neighbours use. 46 came out of the generator; two had reference answers that didn't answer the question and were removed by hand. Both modes were run on the new set:
+
+| Held-out, 44 questions | Loop agent | Fast path |
+|---|---:|---:|
+| Correct & faithful | 47.7% | **63.6%** |
+| Correctness = 2 | 31 | 31 |
+| Unfaithful | 38.6% | 13.6% |
+| Latency p50 / p95 | 13.7 s / 19.6 s | 3.6 s / 8.4 s |
+| Cost / question | $0.0011 | $0.0002 |
+
+Both modes score lower than on the dev set, so the new questions are harder. The gap between them stays close (+16 points vs +20 on dev), which is what you would not see if the prompt only fit the dev questions. Question by question, correctness is the same in both modes (31 full marks each). The difference is faithfulness: 12 questions faithful only in fast mode and 1 only in loop mode (exact McNemar p ≈ 0.003). For correct & faithful it is 9 vs 2 (p ≈ 0.07 at this sample size). The fast path doesn't find more of the answer; it adds less that isn't there.
+
+Still open: the set is single-hop only (no multi-hop, unanswerable or non-English questions), there is one judge model, and the judge prompt was calibrated on 20 answers that were also used to write it.
+
 Reproduce (stack running via `docker compose up`, papers ingested):
 
 ```bash
@@ -117,6 +184,12 @@ python eval/run_agent.py --label v0                      # agent answers (costs 
 python eval/judge_answers.py --answers v0 --label v0_j2 --prompt judge_v2
 python eval/calibrate.py sheet --judged v0_j2            # human labelling sheet
 python eval/calibrate.py compare --judged v0_j2
+
+python eval/run_retrieval.py --mode dense --rerank --label v2_dense_rerank   # retrieval ablation
+python eval/run_agent.py --label fast3 --workers 3                            # with AGENT_MODE=fast
+python eval/judge_answers.py --answers fast3 --label fast3_j2
+python eval/run_agent.py --questions eval/questions_heldout.jsonl --label ho_fast
+python eval/judge_answers.py --questions eval/questions_heldout.jsonl --answers ho_fast --label ho_fast_j2
 ```
 
 ---
@@ -446,13 +519,15 @@ docker push gcr.io/$PROJECT_ID/translation-service:latest
 ### Quick start (Docker Compose)
 
 ```bash
-cp .env.example .env          # set GOOGLE_API_KEY
-docker compose up -d --build  # Milvus + translation + mcp-server + mcp-host + streamlit
+cp .env.example .env                  # set OPENAI_API_KEY, GOOGLE_API_KEY (embeddings), VOYAGE_API_KEY (rerank)
+docker compose up -d --build --wait   # Milvus + translation + mcp-server + mcp-host + streamlit
 # put PDFs under papers/AI, papers/Security, papers/Other, then:
 python scripts/ingest_papers.py --dir papers
 ```
 
 UI at http://localhost:8080, API docs at http://localhost:8000/docs.
+
+`--wait` returns once every service passes its healthcheck. mcp-host only counts as healthy after it has an MCP session with the tool server, so requests sent right after the command returns won't fail on startup order.
 
 ### Tests
 
@@ -587,20 +662,29 @@ curl -X POST http://localhost:8000/invoke \
 
 | Variable | Service | Default | Description |
 |----------|---------|---------|-------------|
-| `GOOGLE_API_KEY` | all | — | **Required.** Google AI Studio API key |
+| `GOOGLE_API_KEY` | mcp-server, index | — | **Required.** Gemini embeddings (and the chat model if `LLM_MODEL` is `google:…`) |
+| `OPENAI_API_KEY` | mcp-host | — | Required when `LLM_MODEL` is `openai:…` |
+| `VOYAGE_API_KEY` | mcp-server | — | Required when `RETRIEVAL_RERANK=true` |
 | `MILVUS_URI` | mcp-server, index | `http://localhost:19530` | Milvus connection URI |
 | `MILVUS_TOKEN` | mcp-server, index | `""` | Milvus auth token (empty for local) |
-| `MILVUS_COLLECTION` | mcp-server, index | `research_papers` | Milvus collection name |
+| `MILVUS_COLLECTION` | mcp-server, index | `research_papers_v2` | Milvus collection (dense vector + BM25 sparse field) |
 | `INDEX_TYPE` | mcp-server, index | `HNSW` | Index algorithm: `HNSW`, `IVF_PQ`, or `DISKANN` |
 | `GEMINI_EMB_MODEL` | mcp-server, index | `gemini-embedding-001` | Embedding model name |
-| `GEMINI_MODEL` | mcp-host | `gemini-3-flash-preview` | Chat/generation model name |
+| `LLM_MODEL` | mcp-host | `google:gemini-3-flash-preview` | Chat model as `provider:model` (`google` or `openai`); evaluated with `openai:gpt-6-luna`. `GEMINI_MODEL` is still read if this is unset |
+| `LLM_REASONING_EFFORT` | mcp-host | provider default | `low` / `medium` / `high` for reasoning models |
+| `AGENT_MODE` | mcp-host | `loop` | `loop`: the model calls tools until it answers. `fast`: one search in code, one model call |
+| `FAST_CONTEXT_K` / `FAST_SEARCH_K` | mcp-host | `5` / `10` | Fast mode: passages shown to the model / hits fetched (the rest feed recommendations) |
+| `AGENT_RECURSION_LIMIT` | mcp-host | `25` | Loop mode: max LLM↔tool steps |
+| `RETRIEVAL_MODE` | mcp-server | `dense` | `dense`, `bm25` or `hybrid` (RRF) for the agent's `vector_search` |
+| `RETRIEVAL_RERANK` | mcp-server | `false` | Rerank first-stage hits with Voyage; evaluated with `true` |
+| `RERANK_MODEL` / `RERANK_CANDIDATES` | mcp-server | `rerank-3` / `30` | Reranker model and how many first-stage hits it sees |
 | `TRANSLATION_SERVICE_URL` | mcp-server | `http://localhost:7000` | Translation service base URL |
 | `MCP_TOOL_URL` | mcp-host | `http://localhost:9000/mcp` | MCP server endpoint |
 | `LANGGRAPH_API_BASE` | streamlit | `http://localhost:8000` | Agent API base URL |
 | `CHUNK_SIZE` | mcp-server, index | `800` | Text chunk size (characters) |
 | `CHUNK_OVERLAP` | mcp-server, index | `120` | Chunk overlap (characters) |
 | `TOP_K` | mcp-server | `4` | Number of vectors to retrieve per search |
-| `SEMANTIC_SCHOLAR_API_KEY` | mcp-server | `""` | Optional; increases Semantic Scholar rate limit |
+| `SEMANTIC_SCHOLAR_API_KEY` | mcp-server | `""` | Optional; for the `search_paper_url` tool, which the agent no longer calls |
 
 ---
 

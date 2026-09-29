@@ -6,6 +6,18 @@ from fastmcp import FastMCP
 mcp = FastMCP("fake-research-tools")
 CORPUS = ["distill.pdf", "specdec.pdf", "paged.pdf", "effnet.pdf"]
 
+# error injection for tests: a "flaky:" key fails on its first call only,
+# a "broken:" key fails every time
+_seen: set[str] = set()
+
+
+def _maybe_fail(key: str) -> None:
+    if key.startswith("broken:"):
+        raise ValueError(f"upstream unavailable for {key}")
+    if key.startswith("flaky:") and key not in _seen:
+        _seen.add(key)
+        raise ValueError(f"503 from upstream for {key}")
+
 
 @mcp.tool
 def translate(text: str, source_lang: str, target_lang: str) -> dict:
@@ -14,6 +26,7 @@ def translate(text: str, source_lang: str, target_lang: str) -> dict:
 
 @mcp.tool
 def vector_search(query: str, domain: str = "All", top_k: int = 4) -> dict:
+    _maybe_fail(query)
     return {"results": [{"content": f"chunk about {f}", "filename": f, "domain": "AI", "score": 0.9, "chunk_id": i}
                         for i, f in enumerate(CORPUS[:top_k])]}
 
@@ -30,6 +43,7 @@ def get_stats() -> dict:
 
 @mcp.tool
 def index_paper(path: str, filename: str, domain: str) -> dict:
+    _maybe_fail(filename)
     return {"filename": filename, "domain": domain, "chunks_indexed": 1}
 
 

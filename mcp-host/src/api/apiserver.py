@@ -114,7 +114,8 @@ async def invoke(req: InvokeRequest, request: Request) -> InvokeResponse:
         raise HTTPException(status_code=504, detail="agent timed out")
     except Exception as e:
         logger.exception("invoke failed")
-        raise HTTPException(status_code=502, detail=f"agent failed: {type(e).__name__}")
+        # a short reason in the response, so eval logs show why a question failed
+        raise HTTPException(status_code=502, detail=f"agent failed: {type(e).__name__}: {str(e)[:200]}")
     return InvokeResponse(**result)
 
 

@@ -16,7 +16,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
-from agent.config import AGENT_TOOLS, DOMAINS, Settings, settings as default_settings
+from agent.config import AGENT_TOOLS, DOMAINS, RETRYABLE_TOOLS, Settings, settings as default_settings
 from agent.llm import json_output, make_llm
 from agent.logging_setup import log_fields
 from agent.mcp_tools import MCPToolbox, ToolCallError
@@ -178,6 +178,9 @@ def _trace_stats(messages: list) -> dict[str, Any]:
 class ResearchAgent:
     """Owns the MCP session and the compiled graph for the life of the process."""
 
+    # pause before retrying a read-only tool that reported an error
+    tool_retry_delay_s: float = 1.0
+
     def __init__(self, cfg: Settings, llm: Any, toolbox: MCPToolbox) -> None:
         self.cfg = cfg
         self.llm = llm
@@ -216,8 +219,14 @@ class ResearchAgent:
             await self.reconnect()
         try:
             return await self.toolbox.call(name, **arguments)
-        except ToolCallError:
-            raise  # the tool ran and reported an error; reconnecting won't help
+        except ToolCallError as e:
+            # the tool ran and reported an error, so reconnecting won't help. For reads,
+            # one retry covers the usual cause (a transient upstream 503/429).
+            if name not in RETRYABLE_TOOLS:
+                raise
+            logger.warning("%s reported an error, retrying once: %s", name, e)
+            await asyncio.sleep(self.tool_retry_delay_s)
+            return await self.toolbox.call(name, **arguments)
         except Exception:
             if await self.toolbox.healthy():
                 raise
@@ -356,12 +365,19 @@ class ResearchAgent:
         """Fill missing recommendations straight from the vector DB, bypassing the LLM."""
         if needed <= 0:
             return []
-        res = await self.call_tool(
-            "vector_search",
-            query=query,
-            domain=domain if domain in DOMAINS else "All",
-            top_k=max(6, needed + len(exclude)),
-        )
+        try:
+            res = await self.call_tool(
+                "vector_search",
+                query=query,
+                domain=domain if domain in DOMAINS else "All",
+                top_k=max(6, needed + len(exclude)),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            # recommendations are extra; an answer with fewer of them beats a 502
+            logger.warning("fallback recommendations unavailable: %r", e)
+            return []
         hits = res.get("results", []) if isinstance(res, dict) else []
         # no URL lookup here: see AGENT_TOOLS in config.py
         return dedupe_papers(

@@ -34,3 +34,8 @@ settings = Settings()
 # call, and the retries added ~15 s to each answer. The tool still exists on the server.
 AGENT_TOOLS = ("translate", "vector_search")
 DOMAINS = ("AI", "Security", "Other")
+
+# Tools with no side effects. When one of these reports an error on a direct call,
+# it is retried once: the usual cause is a transient upstream failure (embedding
+# API 503/429), and calling a read twice is harmless. index_paper is not here.
+RETRYABLE_TOOLS = frozenset({"vector_search", "get_stats"})

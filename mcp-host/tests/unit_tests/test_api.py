@@ -26,6 +26,8 @@ class FakeAgent:
 
     async def run(self, query, language, domain):
         self.calls.append((query, language, domain))
+        if query == "boom":
+            raise RuntimeError("vector_search failed: 503 from embedding API")
         return {
             "answer": "ok",
             "papers": [{"title": "p1", "url": "u1"}],
@@ -78,3 +80,9 @@ def test_upload_validates_domain(client):
 def test_stats_and_ok(client):
     assert client.get("/stats").json() == {"AI": 3, "Security": 2, "Other": 1}
     assert client.get("/ok").json() == {"status": "ok", "mcp": True}
+
+
+def test_invoke_failure_reports_reason(client):
+    r = client.post("/invoke", json={"query": "boom", "domain": "AI"})
+    assert r.status_code == 502
+    assert r.json()["detail"] == "agent failed: RuntimeError: vector_search failed: 503 from embedding API"

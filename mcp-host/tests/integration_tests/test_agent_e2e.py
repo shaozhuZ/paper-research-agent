@@ -18,7 +18,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 
 from agent.config import settings
 from agent.graph import ResearchAgent
-from agent.mcp_tools import MCPToolbox
+from agent.mcp_tools import MCPToolbox, ToolCallError
 
 pytestmark = pytest.mark.anyio
 SERVER = Path(__file__).resolve().parents[1] / "fake_mcp_server.py"
@@ -186,3 +186,56 @@ async def test_direct_tool_call_recovers_after_restart(server):
         assert res["chunks_indexed"] == 1
     finally:
         await agent.close()
+
+
+async def test_read_tool_error_is_retried_once(server):
+    agent = await ResearchAgent.create(_cfg(server["port"]), llm=ScriptedLLM(script=[]))
+    agent.tool_retry_delay_s = 0
+    try:
+        # fails the first time, succeeds on the retry
+        res = await agent.call_tool("vector_search", query="flaky:distillation", top_k=2)
+        assert [h["filename"] for h in res["results"]] == ["distill.pdf", "specdec.pdf"]
+        # a tool that keeps failing still surfaces the error after one retry
+        with pytest.raises(ToolCallError, match="upstream unavailable"):
+            await agent.call_tool("vector_search", query="broken:distillation")
+    finally:
+        await agent.close()
+
+
+async def test_write_tool_error_is_not_retried(server):
+    agent = await ResearchAgent.create(_cfg(server["port"]), llm=ScriptedLLM(script=[]))
+    agent.tool_retry_delay_s = 0
+    try:
+        with pytest.raises(ToolCallError):
+            await agent.call_tool("index_paper", path="/data/uploads/x.pdf", filename="flaky:x.pdf", domain="AI")
+        # the next call succeeds, so the first failure was not silently retried
+        res = await agent.call_tool("index_paper", path="/data/uploads/x.pdf", filename="flaky:x.pdf", domain="AI")
+        assert res["chunks_indexed"] == 1
+    finally:
+        await agent.close()
+
+
+async def test_loop_answer_survives_failed_fallback(server):
+    # the model's own search works; the fallback search (which uses the raw query) fails
+    agent = await ResearchAgent.create(_cfg(server["port"]), llm=ScriptedLLM(script=_script()))
+    agent.tool_retry_delay_s = 0
+    try:
+        out = await agent.run("broken: what is distillation?", "English", "AI")
+    finally:
+        await agent.close()
+    assert out["answer"].startswith("Distillation")
+    # one recommendation short instead of a failed request
+    assert [p["title"] for p in out["recommended_papers"]] == ["paged.pdf"]
+
+
+async def test_fast_mode_survives_flaky_search(server):
+    llm = ScriptedLLM(script=[AIMessage(content='{"answer": "Soft targets.", "sources": [1]}')])
+    cfg = replace(_cfg(server["port"]), agent_mode="fast", fast_context_k=2, fast_search_k=4)
+    agent = await ResearchAgent.create(cfg, llm=llm)
+    agent.tool_retry_delay_s = 0
+    try:
+        out = await agent.run("flaky:what is distillation?", "English", "AI")
+    finally:
+        await agent.close()
+    assert out["answer"] == "Soft targets."
+    assert [c["filename"] for c in out["contexts"]] == ["distill.pdf", "specdec.pdf"]

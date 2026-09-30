@@ -1,8 +1,33 @@
-# Paper Research Agent
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-dark.svg">
+    <img alt="paper research agent" src="docs/logo-light.svg" width="640">
+  </picture>
+</p>
 
-**English** | [中文](README.zh-CN.md)
+<p align="center">
+<b>Question answering over research papers that sticks to the source.</b> One search, one model call, and every answer comes with the passages it cites.<br/>Measured step by step on a fixed question set: from 16% to 76.9% correct and faithful, at 3 s and $0.0002 per question.
+</p>
 
-A question-answering agent over a collection of research papers, built with LangGraph, MCP and Milvus. You ask a question about the papers and get back an answer that sticks to what the papers say, the passages it was based on, and related papers from the collection.
+<p align="center">
+  <a href="#evaluation"><img alt="correct & faithful" src="https://img.shields.io/badge/correct%20%26%20faithful-16%25%20%E2%86%92%2076.9%25-2ea44f?style=flat-square"></a>
+  <a href="#evaluation"><img alt="held-out" src="https://img.shields.io/badge/held--out-63.6%25%20vs%2047.7%25%20%28agent%29-2ea44f?style=flat-square"></a>
+  <a href="#evaluation"><img alt="latency" src="https://img.shields.io/badge/p50%20latency-30%20s%20%E2%86%92%203.1%20s-0969da?style=flat-square"></a>
+  <a href="#evaluation"><img alt="cost" src="https://img.shields.io/badge/cost%20%2F%20question-%240.02%20%E2%86%92%20%240.0002-0969da?style=flat-square"></a>
+  <a href="#evaluation"><img alt="recall" src="https://img.shields.io/badge/Recall%401-0.625%20%E2%86%92%200.865-8250df?style=flat-square"></a>
+</p>
+<p align="center">
+  <a href="#architecture"><img alt="Python" src="https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white"></a>
+  <a href="#architecture"><img alt="LangGraph" src="https://img.shields.io/badge/LangGraph-agent-1C3C3C?style=flat-square&logo=langchain&logoColor=white"></a>
+  <a href="#architecture"><img alt="MCP" src="https://img.shields.io/badge/MCP-FastMCP-5A4FCF?style=flat-square"></a>
+  <a href="#architecture"><img alt="Milvus" src="https://img.shields.io/badge/Milvus-2.5%20%C2%B7%20dense%20%2B%20BM25-00A1EA?style=flat-square&logo=milvus&logoColor=white"></a>
+  <a href="#architecture"><img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-SSE-009688?style=flat-square&logo=fastapi&logoColor=white"></a>
+  <a href="#architecture"><img alt="Streamlit" src="https://img.shields.io/badge/Streamlit-UI-FF4B4B?style=flat-square&logo=streamlit&logoColor=white"></a>
+  <a href="#running-it"><img alt="Docker Compose" src="https://img.shields.io/badge/Docker-compose-2496ED?style=flat-square&logo=docker&logoColor=white"></a>
+  <a href="#engineering-notes"><img alt="LangSmith" src="https://img.shields.io/badge/LangSmith-tracing-1C3C3C?style=flat-square&logo=langchain&logoColor=white"></a>
+</p>
+
+<p align="center"><b>English</b> | <a href="README.zh-CN.md">中文</a></p>
 
 It started as a course project: a tool-calling agent that answered most questions but padded them with claims the sources didn't support. Most of the work since then has gone into measuring that properly and fixing it, with every change checked against a fixed question set.
 

@@ -1,8 +1,33 @@
-# Paper Research Agent
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-dark.svg">
+    <img alt="paper research agent" src="docs/logo-light.svg" width="640">
+  </picture>
+</p>
 
-[English](README.md) | **中文**
+<p align="center">
+<b>基于论文库、只依据原文作答的问答 agent。</b>一次检索、一次模型调用，每个答案都附上它引用的原文段落。<br/>在固定题集上逐步评测：正确且忠实从 16% 提升到 76.9%，每题 3 秒、$0.0002。
+</p>
 
-一个基于论文库的问答 agent，用 LangGraph、MCP 和 Milvus 搭建。你就库里的论文提一个问题，它会给出只依据原文的回答，同时列出回答所依据的原文段落，以及库里的相关论文。
+<p align="center">
+  <a href="#评测"><img alt="correct & faithful" src="https://img.shields.io/badge/%E6%AD%A3%E7%A1%AE%E4%B8%94%E5%BF%A0%E5%AE%9E-16%25%20%E2%86%92%2076.9%25-2ea44f?style=flat-square"></a>
+  <a href="#评测"><img alt="held-out" src="https://img.shields.io/badge/%E9%AA%8C%E8%AF%81%E9%9B%86-63.6%25%EF%BC%88agent%2047.7%25%EF%BC%89-2ea44f?style=flat-square"></a>
+  <a href="#评测"><img alt="latency" src="https://img.shields.io/badge/p50%20%E5%BB%B6%E8%BF%9F-30%20s%20%E2%86%92%203.1%20s-0969da?style=flat-square"></a>
+  <a href="#评测"><img alt="cost" src="https://img.shields.io/badge/%E6%AF%8F%E9%A2%98%E6%88%90%E6%9C%AC-%240.02%20%E2%86%92%20%240.0002-0969da?style=flat-square"></a>
+  <a href="#评测"><img alt="recall" src="https://img.shields.io/badge/Recall%401-0.625%20%E2%86%92%200.865-8250df?style=flat-square"></a>
+</p>
+<p align="center">
+  <a href="#架构"><img alt="Python" src="https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white"></a>
+  <a href="#架构"><img alt="LangGraph" src="https://img.shields.io/badge/LangGraph-agent-1C3C3C?style=flat-square&logo=langchain&logoColor=white"></a>
+  <a href="#架构"><img alt="MCP" src="https://img.shields.io/badge/MCP-FastMCP-5A4FCF?style=flat-square"></a>
+  <a href="#架构"><img alt="Milvus" src="https://img.shields.io/badge/Milvus-2.5%20%C2%B7%20dense%20%2B%20BM25-00A1EA?style=flat-square&logo=milvus&logoColor=white"></a>
+  <a href="#架构"><img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-SSE-009688?style=flat-square&logo=fastapi&logoColor=white"></a>
+  <a href="#架构"><img alt="Streamlit" src="https://img.shields.io/badge/Streamlit-UI-FF4B4B?style=flat-square&logo=streamlit&logoColor=white"></a>
+  <a href="#运行"><img alt="Docker Compose" src="https://img.shields.io/badge/Docker-compose-2496ED?style=flat-square&logo=docker&logoColor=white"></a>
+  <a href="#工程要点"><img alt="LangSmith" src="https://img.shields.io/badge/LangSmith-tracing-1C3C3C?style=flat-square&logo=langchain&logoColor=white"></a>
+</p>
+
+<p align="center"><a href="README.md">English</a> | <b>中文</b></p>
 
 项目起点是一门课的作业：一个靠工具调用的 agent，大多数问题都能答上，但会在答案里掺进原文没有的说法。之后的工作主要就是把这个问题测清楚、再修好，每一处改动都在同一套固定题目上验证过。
 

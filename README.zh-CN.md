@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/logo-dark.svg">
-    <img alt="paper research agent" src="docs/logo-light.svg" width="640">
+    <img alt="paper research agent" src="docs/logo-light.svg" width="340">
   </picture>
 </p>
 
@@ -9,13 +9,6 @@
 <b>基于论文库、只依据原文作答的问答 agent。</b>一次检索、一次模型调用，每个答案都附上它引用的原文段落。<br/>在固定题集上逐步评测：正确且忠实从 16% 提升到 76.9%，每题 3 秒、$0.0002。
 </p>
 
-<p align="center">
-  <a href="#评测"><img alt="correct & faithful" src="https://img.shields.io/badge/%E6%AD%A3%E7%A1%AE%E4%B8%94%E5%BF%A0%E5%AE%9E-16%25%20%E2%86%92%2076.9%25-2ea44f?style=flat-square"></a>
-  <a href="#评测"><img alt="held-out" src="https://img.shields.io/badge/%E9%AA%8C%E8%AF%81%E9%9B%86-63.6%25%EF%BC%88agent%2047.7%25%EF%BC%89-2ea44f?style=flat-square"></a>
-  <a href="#评测"><img alt="latency" src="https://img.shields.io/badge/p50%20%E5%BB%B6%E8%BF%9F-30%20s%20%E2%86%92%203.1%20s-0969da?style=flat-square"></a>
-  <a href="#评测"><img alt="cost" src="https://img.shields.io/badge/%E6%AF%8F%E9%A2%98%E6%88%90%E6%9C%AC-%240.02%20%E2%86%92%20%240.0002-0969da?style=flat-square"></a>
-  <a href="#评测"><img alt="recall" src="https://img.shields.io/badge/Recall%401-0.625%20%E2%86%92%200.865-8250df?style=flat-square"></a>
-</p>
 <p align="center">
   <a href="#架构"><img alt="Python" src="https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white"></a>
   <a href="#架构"><img alt="LangGraph" src="https://img.shields.io/badge/LangGraph-agent-1C3C3C?style=flat-square&logo=langchain&logoColor=white"></a>

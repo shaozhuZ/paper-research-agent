@@ -10,6 +10,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/shaozhuZ/paper-research-agent/actions/workflows/tests.yml"><img alt="tests" src="https://img.shields.io/github/actions/workflow/status/shaozhuZ/paper-research-agent/tests.yml?branch=main&style=flat-square&label=tests"></a>
   <a href="#架构"><img alt="Python" src="https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white"></a>
   <a href="#架构"><img alt="LangGraph" src="https://img.shields.io/badge/LangGraph-agent-1C3C3C?style=flat-square&logo=langchain&logoColor=white"></a>
   <a href="#架构"><img alt="MCP" src="https://img.shields.io/badge/MCP-FastMCP-5A4FCF?style=flat-square"></a>
@@ -296,7 +297,7 @@ python eval/calibrate.py sheet --judged fast3_j2                             # �
 
 **启动顺序。** compose 健康检查让每个服务等依赖就绪再启动；`mcp-host` 只有拿到 MCP 会话后才算健康，所以 `docker compose up --wait` 返回时，系统已经确实能答题了。
 
-**测试。** `mcp-host` 有 40 个测试（单元测试，加上在本地假工具服务器和脚本化模型上运行真实图和真实 MCP 会话的集成测试，不需要任何 API key），另有评测指标的单元测试（`eval/tests`）。
+**测试。** `mcp-host` 有 40 个测试（单元测试，加上在本地假工具服务器和脚本化模型上运行真实图和真实 MCP 会话的集成测试，不需要任何 API key），另有评测指标（`eval/tests`）和 embedding 客户端（`mcp-server/tests`）的单元测试，一共 65 个，每次 push 由 GitHub Actions 自动运行。
 
 ---
 

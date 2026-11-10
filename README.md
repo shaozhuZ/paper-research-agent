@@ -10,6 +10,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/shaozhuZ/paper-research-agent/actions/workflows/tests.yml"><img alt="tests" src="https://img.shields.io/github/actions/workflow/status/shaozhuZ/paper-research-agent/tests.yml?branch=main&style=flat-square&label=tests"></a>
   <a href="#architecture"><img alt="Python" src="https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white"></a>
   <a href="#architecture"><img alt="LangGraph" src="https://img.shields.io/badge/LangGraph-agent-1C3C3C?style=flat-square&logo=langchain&logoColor=white"></a>
   <a href="#architecture"><img alt="MCP" src="https://img.shields.io/badge/MCP-FastMCP-5A4FCF?style=flat-square"></a>
@@ -296,7 +297,7 @@ python eval/calibrate.py sheet --judged fast3_j2                             # h
 
 **Startup order.** Compose healthchecks make each service wait for its dependencies; `mcp-host` only reports healthy once it holds an MCP session, so `docker compose up --wait` returns when the system can actually answer.
 
-**Tests.** 40 tests in `mcp-host` (unit tests plus integration tests that run the real graph and MCP session against a local fake tool server and a scripted model, no API keys needed) and unit tests for the eval metrics (`eval/tests`).
+**Tests.** 40 tests in `mcp-host` (unit tests plus integration tests that run the real graph and MCP session against a local fake tool server and a scripted model, no API keys needed) unit tests for the eval metrics (`eval/tests`) and the embedding client (`mcp-server/tests`); 65 in total, run by GitHub Actions on every push.
 
 ---
 

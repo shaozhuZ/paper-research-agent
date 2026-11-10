@@ -1,0 +1,32 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"   # same as the service images
+          cache: pip
+          cache-dependency-path: mcp-host/requirements*.txt
+
+      - name: Install
+        run: pip install -r mcp-host/requirements-dev.txt requests
+
+      # integration tests start a local fake MCP server, so no API keys or network calls
+      - name: mcp-host
+        working-directory: mcp-host
+        run: python -m pytest -q
+
+      - name: eval metrics
+        run: python -m pytest -q eval/tests
+
+      - name: mcp-server embeddings
+        run: python -m pytest -q mcp-server/tests

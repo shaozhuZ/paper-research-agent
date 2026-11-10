@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-<b>基于论文库、只依据原文作答的问答 agent。</b>一次检索、一次模型调用，每个答案都附上它引用的原文段落。<br/>在固定题集上逐步评测：正确且忠实从 16% 提升到 76.9%，每题 3 秒、$0.0002。
+<b>基于论文库、只依据原文作答的问答 agent。</b>一次检索、一次模型调用，每个答案都附上它引用的原文段落。<br/>在固定题集上逐步评测：正确且忠实从 16% 提升到 78.8%，每题 3 秒、$0.0002。
 </p>
 
 <p align="center">
@@ -26,13 +26,13 @@
 
 | | 课程版 | 现在 |
 |---|---:|---:|
-| 正确且忠实的回答（104 道开发集） | 16% | **76.9%** |
-| 同上，44 道验证集（括号内为同一批题上的工具调用 agent） | | **63.6%**（47.7%） |
-| 不忠实的回答 | 82% | 6.7% |
+| 正确且忠实的回答（104 道开发集） | 16% | **78.8%** |
+| 不忠实的回答（开发集） | 82% | 3.8% |
+| 44 道验证集上不忠实的回答（括号内为同一批题上的工具调用 agent） | | **1 道**（9 道） |
 | 没答出来的题（agent 循环调用直到步数上限） | 10.6% | 0% |
-| 延迟 p50 / p95 | 30 s / 101 s | 3.1 s / 5.9 s |
+| 延迟 p50 / p95 | 30 s / 101 s | 3.0 s / 8.7 s |
 | 每题成本 | 约 $0.02 | $0.0002 |
-| 检索 Recall@1 | 0.625 | 0.865 |
+| 检索 Recall@1 | 0.625 | 0.856 |
 
 ![回答及其引用的原文段落](docs/ui.png)
 
@@ -94,8 +94,8 @@ flowchart LR
     ▼
  mcp-server (:9000)       FastMCP 工具：vector_search、retrieve、index_paper、get_stats、translate、search_paper_url
     │                 │                         │
- Milvus (:19530)   Gemini embedding、        translation-service (:7000)
- dense + BM25      Voyage rerank API
+ Milvus (:19530)   Voyage embedding          translation-service (:7000)
+ dense + BM25      和 rerank API
 ```
 
 | 服务 | 作用 |
@@ -107,7 +107,7 @@ flowchart LR
 | `eval/` | 出题、检索指标、agent 作答、LLM 裁判、人工校准 |
 | `scripts/` | 可断点续传的批量入库、延迟压测 |
 
-论文按 800 字符切段、重叠 120 字符，用 `gemini-embedding-001`（3072 维）做 embedding，存进 Milvus 的一个 collection：一个 dense HNSW 索引，外加一个由 Milvus 从原文自动计算的 BM25 稀疏字段。PDF 通过共享卷按路径交给工具服务器，而不是塞进 MCP 消息里（MCP 消息有 4 MB 上限）。
+论文按 800 字符切段、重叠 120 字符，用 Voyage `voyage-4`（1024 维）做 embedding（2026 年 10 月之前是 Gemini `gemini-embedding-001`，见[更换 embedding 服务](#更换-embedding-服务)），存进 Milvus 的一个 collection：一个 dense HNSW 索引，外加一个由 Milvus 从原文自动计算的 BM25 稀疏字段。PDF 通过共享卷按路径交给工具服务器，而不是塞进 MCP 消息里（MCP 消息有 4 MB 上限）。
 
 ---
 
@@ -169,7 +169,8 @@ v1 在 12 次分歧里有 11 次偏宽松；v2 修好了正确性，但忠实性
 | rerank | vector_search 改为 dense + rerank | 56.7% | 28.8% | 13.7 s / 22.4 s | $0.0011 |
 | fast | 一次检索、一次模型调用 | 62.5% | 5.8% | 2.9 s / 4.7 s | $0.0002 |
 | fast2 | prompt 要求答全 | 73.1% | 9.7% | 3.1 s / 5.0 s | $0.0002 |
-| fast3 | 回复加严格 JSON schema | **76.9%** | **6.7%** | **3.1 s / 5.9 s** | **$0.0002** |
+| fast3 | 回复加严格 JSON schema | 76.9% | 6.7% | 3.1 s / 5.9 s | $0.0002 |
+| voyage | embedding 从 Gemini 换成 Voyage-4 | **78.8%** | **3.8%** | **3.0 s / 8.7 s** | **$0.0002** |
 
 #### 模型与延迟
 
@@ -218,7 +219,7 @@ Hybrid 用 RRF（k = 60），两边各取 50 个候选；rerank 用 Voyage `rera
 | 延迟 p50 / p95 | 13.7 s / 19.6 s | 3.6 s / 8.4 s |
 | 每题成本 | $0.0011 | $0.0002 |
 
-两种模式在验证集上的分数都比开发集低，说明新题更难。但两者的差距基本保持（+16 个点，开发集是 +20）；如果 prompt 只是拟合了开发集，就不会是这样。逐题看，两种模式的正确性一样（都是 31 道满分），差别在忠实性：只在快路径忠实的有 12 道，只在多轮忠实的有 1 道（精确 McNemar 检验 p ≈ 0.003）。正确且忠实是 9 对 2（这个样本量下 p ≈ 0.07）。快路径并没有找到更多答案，它只是更少添加原文没有的东西。
+两种模式在验证集上的分数都比开发集低，说明新题更难。但两者的差距基本保持（+16 个点，开发集是 +20）；如果 prompt 只是拟合了开发集，就不会是这样。逐题看，两种模式的正确性一样（都是 31 道满分），差别在忠实性：只在快路径忠实的有 12 道，只在多轮忠实的有 1 道（精确 McNemar 检验 p ≈ 0.003）。正确且忠实是 9 对 2（这个样本量下 p ≈ 0.07）。快路径并没有找到更多答案，它只是更少添加原文没有的东西。以上是 Gemini embedding 下的数字；换成 Voyage-4 后，忠实性的差距仍然在，但正确且忠实的差距缩小到 2 道（[详见](#更换-embedding-服务)）。
 
 #### 剩下的错误在哪，以及据此决定不做什么
 
@@ -233,6 +234,34 @@ Hybrid 用 RRF（k = 60），两边各取 50 个候选；rerank 用 Voyage `rera
 | 答错 | 1 | 0 |
 
 大多数失分是答案没错，但漏了一个次要点。这张表用来决定哪些东西不做。纠错式检索（给段落打相关性分、改写问题、重新检索）针对的是第一行，148 道题里只有 2 道。逐句校验引用针对不忠实，现在大约 7%，代价是每题多一次模型调用。把难题分流给多轮 agent 的 router，需要多跳题才能看出效果，而这套题里一道都没有。根据现有数据，这几项都不值得加；下一步应该是做一套多跳题，看看"只检索一次"的设计在那里会不会失效。
+
+#### 更换 embedding 服务
+
+2026 年 10 月，Gemini embedding 所在的 Google 项目被收回了 API 权限（`403 PERMISSION_DENIED`），检索无法使用。同样的 2,970 段（原文和段落编号都不变，所以评测题的标准答案全部有效）用 Voyage `voyage-4`（1024 维）重新做了 embedding，存进新 collection `research_papers_voyage4_v1`；Gemini 的 collection 保留。每个 collection 记录了建库时用的 embedding 提供方、模型和维度，配置对不上时工具服务器拒绝检索。用一个模型算出的问题向量去另一个模型的向量库里检索，并不会报错，只会返回看起来合理、实际不对的段落。
+
+本节之前的所有数字都是用 Gemini embedding 测的。换完之后，在同样的题上重新测了线上配置：
+
+| 开发集，104 道 | Gemini（fast3） | Voyage-4 |
+|---|---:|---:|
+| Recall@1 / @3 / @5（dense + rerank） | 0.865 / 0.942 / 0.962 | 0.856 / 0.952 / 0.962 |
+| MRR | 0.905 | 0.903 |
+| 正确且忠实 | 76.9% | 78.8% |
+| 正确性 2 / 1 / 0 | 83 / 19 / 2 | 83 / 19 / 2 |
+| 不忠实（答了的） | 6.7% | 3.8% |
+| 延迟 p50 / p95 | 3.1 s / 5.9 s | 3.0 s / 8.7 s |
+
+逐题看，两边都正确且忠实的 76 道，只 Gemini 对的 4 道，只 Voyage 对的 6 道（精确 McNemar 检验 p ≈ 0.75），换 embedding 没有带来可测的变化。p95 变高是模型那一步慢：最慢的几道题在模型调用上花了 8–9 秒，检索都不到 1 秒。
+
+验证集上的对比也重跑了一遍，用的是裁判的原始打分：
+
+| 验证集，44 道 | Gemini：多轮 / 快路径 | Voyage-4：多轮 / 快路径 |
+|---|---:|---:|
+| 正确且忠实 | 21 / 28 | 27 / 29 |
+| 正确性满分 | 31 / 31 | 32 / 30 |
+| 不忠实 | 17 / 6 | 9 / 1 |
+| 只在一种模式下忠实（多轮 / 快路径） | 1 / 12（p ≈ 0.003） | 1 / 9（p ≈ 0.02） |
+
+换了 embedding 之后进步最多的是多轮 agent，正确且忠实的差距从 7 道缩小到 2 道（p ≈ 0.77；之前是 p ≈ 0.07，本来就没有站稳）。两次都成立的是忠实性：两种模式拿满分的题数差不多，但快路径加入原文没有的内容要少得多。验证集能支持的结论是这一点，而不是总分更高。
 
 ### 复现
 
@@ -274,7 +303,7 @@ python eval/calibrate.py sheet --judged fast3_j2                             # �
 ## 运行
 
 ```bash
-cp .env.example .env                  # 填 OPENAI_API_KEY、GOOGLE_API_KEY（embedding）、VOYAGE_API_KEY（rerank）
+cp .env.example .env                  # 填 OPENAI_API_KEY 和 VOYAGE_API_KEY（embedding 和 rerank）
 docker compose up -d --build --wait   # Milvus + translation + mcp-server + mcp-host + streamlit
 # 把 PDF 放到 papers/AI、papers/Security、papers/Other 下，然后：
 python scripts/ingest_papers.py --dir papers
@@ -353,8 +382,8 @@ data: {"type": "done", "result": { ...和 /invoke 相同... }}
 | 变量 | 服务 | 默认值 | 说明 |
 |---|---|---|---|
 | `OPENAI_API_KEY` | mcp-host | | `LLM_MODEL` 为 `openai:…` 时必填 |
-| `GOOGLE_API_KEY` | mcp-server | | Gemini embedding（`LLM_MODEL` 为 `google:…` 时也用于聊天模型） |
-| `VOYAGE_API_KEY` | mcp-server | | `RETRIEVAL_RERANK=true` 时必填 |
+| `GOOGLE_API_KEY` | mcp-server | | 只在 `EMBEDDING_PROVIDER=google` 或聊天模型为 `google:…` 时需要 |
+| `VOYAGE_API_KEY` | mcp-server | | `EMBEDDING_PROVIDER=voyage` 时用于 embedding，也用于 rerank |
 | `LLM_MODEL` | mcp-host | `openai:gpt-6-luna`（`google:gemini-3-flash-preview`） | 聊天模型，格式 `provider:model`，provider 为 `google` 或 `openai` |
 | `LLM_REASONING_EFFORT` | mcp-host | 服务商默认 | 推理模型的 `low` / `medium` / `high` |
 | `AGENT_MODE` | mcp-host | `fast`（`loop`） | `fast`：代码检索一次、模型调用一次。`loop`：模型反复调用工具直到作答 |
@@ -365,8 +394,9 @@ data: {"type": "done", "result": { ...和 /invoke 相同... }}
 | `RETRIEVAL_RERANK` | mcp-server | `true`（`false`） | 用 Voyage 对第一阶段结果重排 |
 | `RERANK_MODEL` / `RERANK_CANDIDATES` | mcp-server | `rerank-3` / `30` | rerank 模型，以及它看到的第一阶段结果数 |
 | `MILVUS_URI` / `MILVUS_TOKEN` | mcp-server | `http://localhost:19530` / 空 | Milvus 连接 |
-| `MILVUS_COLLECTION` | mcp-server | `research_papers_v2` | dense 向量 + BM25 稀疏字段 |
-| `GEMINI_EMB_MODEL` | mcp-server | `gemini-embedding-001` | embedding 模型 |
+| `MILVUS_COLLECTION` | mcp-server | `research_papers_voyage4_v1`（`research_papers_v2`） | dense 向量 + BM25 稀疏字段；记录了建库时用的 embedding 模型 |
+| `EMBEDDING_PROVIDER` / `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION` | mcp-server | `voyage` / `voyage-4` / `1024`（`google` / `gemini-embedding-001` / 模型默认） | 必须和 collection 一致，第一次检索前会检查 |
+| `GEMINI_EMB_MODEL` | mcp-server | `gemini-embedding-001` | Google embedding 模型，`EMBEDDING_MODEL` 没设置时使用 |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | mcp-server | `800` / `120` | 单位为字符 |
 | `LANGSMITH_TRACING` / `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT` | mcp-host | `false` / 空 / `research-agent` | 请求追踪 |
 | `DEEPSEEK_API_KEY` / `EVAL_MODEL` | 评测脚本 | / `deepseek:deepseek-chat` | 出题和裁判 |

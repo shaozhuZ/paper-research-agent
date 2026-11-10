@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-<b>Question answering over research papers that sticks to the source.</b> One search, one model call, and every answer comes with the passages it cites.<br/>Measured step by step on a fixed question set: from 16% to 76.9% correct and faithful, at 3 s and $0.0002 per question.
+<b>Question answering over research papers that sticks to the source.</b> One search, one model call, and every answer comes with the passages it cites.<br/>Measured step by step on a fixed question set: from 16% to 78.8% correct and faithful, at 3 s and $0.0002 per question.
 </p>
 
 <p align="center">
@@ -26,13 +26,13 @@ It started as a course project: a tool-calling agent that answered most question
 
 | | Course version | Now |
 |---|---:|---:|
-| Correct and faithful answers (104-question dev set) | 16% | **76.9%** |
-| Same, on 44 held-out questions (vs. the tool-calling agent on the same questions) | | **63.6%** (vs 47.7%) |
-| Unfaithful answers | 82% | 6.7% |
+| Correct and faithful answers (104-question dev set) | 16% | **78.8%** |
+| Unfaithful answers (dev set) | 82% | 3.8% |
+| Unfaithful answers on 44 held-out questions (vs. the tool-calling agent on the same questions) | | **1** (vs 9) |
 | Questions left unanswered (agent looped until the step limit) | 10.6% | 0% |
-| Latency p50 / p95 | 30 s / 101 s | 3.1 s / 5.9 s |
+| Latency p50 / p95 | 30 s / 101 s | 3.0 s / 8.7 s |
 | Cost per question | ~$0.02 | $0.0002 |
-| Retrieval Recall@1 | 0.625 | 0.865 |
+| Retrieval Recall@1 | 0.625 | 0.856 |
 
 ![Answer with the passages it cites](docs/ui.png)
 
@@ -94,8 +94,8 @@ Every request can be traced in LangSmith as one tree, which shows where the time
     ▼
  mcp-server (:9000)       FastMCP tools: vector_search, retrieve, index_paper, get_stats, translate, search_paper_url
     │                 │                         │
- Milvus (:19530)   Gemini embeddings,        translation-service (:7000)
- dense + BM25      Voyage rerank API
+ Milvus (:19530)   Voyage embeddings         translation-service (:7000)
+ dense + BM25      and rerank APIs
 ```
 
 | Service | What it does |
@@ -107,7 +107,7 @@ Every request can be traced in LangSmith as one tree, which shows where the time
 | `eval/` | Question generation, retrieval metrics, agent runs, LLM judge, human calibration |
 | `scripts/` | Bulk ingestion with resume, latency benchmark |
 
-Papers are split into 800-character chunks with 120 characters of overlap, embedded with `gemini-embedding-001` (3072 dimensions) and stored in a Milvus collection with a dense HNSW index and a BM25 sparse field that Milvus computes from the text. PDFs are passed to the tool server by path on a shared volume, not inside MCP messages, which have a 4 MB limit.
+Papers are split into 800-character chunks with 120 characters of overlap, embedded with Voyage `voyage-4` (1024 dimensions; Gemini `gemini-embedding-001` before October 2026, see [Switching embeddings](#switching-embeddings-to-voyage-4)) and stored in a Milvus collection with a dense HNSW index and a BM25 sparse field that Milvus computes from the text. PDFs are passed to the tool server by path on a shared volume, not inside MCP messages, which have a 4 MB limit.
 
 ---
 
@@ -169,7 +169,8 @@ Every row is a full run over the same 104 questions, graded by the same judge. R
 | rerank | vector_search uses dense + rerank | 56.7% | 28.8% | 13.7 s / 22.4 s | $0.0011 |
 | fast | one search, one model call | 62.5% | 5.8% | 2.9 s / 4.7 s | $0.0002 |
 | fast2 | prompt asks for complete answers | 73.1% | 9.7% | 3.1 s / 5.0 s | $0.0002 |
-| fast3 | strict JSON schema on the reply | **76.9%** | **6.7%** | **3.1 s / 5.9 s** | **$0.0002** |
+| fast3 | strict JSON schema on the reply | 76.9% | 6.7% | 3.1 s / 5.9 s | $0.0002 |
+| voyage | embeddings moved from Gemini to Voyage-4 | **78.8%** | **3.8%** | **3.0 s / 8.7 s** | **$0.0002** |
 
 #### Model and latency
 
@@ -218,7 +219,7 @@ The fast-path prompt was revised after reading failures on these 104 questions, 
 | Latency p50 / p95 | 13.7 s / 19.6 s | 3.6 s / 8.4 s |
 | Cost / question | $0.0011 | $0.0002 |
 
-Both modes score lower than on the dev set, so the new questions are harder. The gap between them stays close (+16 points vs +20 on dev), which is what you would not see if the prompt only fit the dev questions. Question by question, correctness is the same in both modes (31 full marks each). The difference is faithfulness: 12 questions faithful only in fast mode and 1 only in loop mode (exact McNemar p ≈ 0.003). For correct & faithful it is 9 vs 2 (p ≈ 0.07 at this sample size). The fast path doesn't find more of the answer; it adds less that isn't there.
+Both modes score lower than on the dev set, so the new questions are harder. The gap between them stays close (+16 points vs +20 on dev), which is what you would not see if the prompt only fit the dev questions. Question by question, correctness is the same in both modes (31 full marks each). The difference is faithfulness: 12 questions faithful only in fast mode and 1 only in loop mode (exact McNemar p ≈ 0.003). For correct & faithful it is 9 vs 2 (p ≈ 0.07 at this sample size). The fast path doesn't find more of the answer; it adds less that isn't there. These numbers use Gemini embeddings; with Voyage-4 the faithfulness gap holds but the correct & faithful gap shrinks to 2 questions ([details](#switching-embeddings-to-voyage-4)).
 
 #### Where the remaining errors are, and what that rules out
 
@@ -233,6 +234,34 @@ The questions the fast path still misses, by cause:
 | Wrong | 1 | 0 |
 
 Most misses are answers that are right but leave out one secondary point. This was used to decide what not to build. Corrective retrieval (grade the passages, rewrite the query, search again) targets the first row, which is 2 questions out of 148. Sentence-level citation checking targets unfaithfulness, now around 7%, at the price of a second model call per question. A router that sends hard questions to the loop agent needs multi-hop questions to show any effect, and this set has none. None of them were worth adding on this evidence; the next step would be a multi-hop question set to find out whether the one-search design breaks down there.
+
+#### Switching embeddings to Voyage-4
+
+In October 2026 the Google project behind the Gemini embeddings lost API access (`403 PERMISSION_DENIED`), and search stopped working. The same 2,970 chunks (same text and chunk ids, so every gold label still holds) were re-embedded with Voyage `voyage-4` at 1024 dimensions into a new collection, `research_papers_voyage4_v1`; the Gemini collection is kept. Each collection records the embedding provider, model and dimension it was built with, and the tool server refuses to search if they don't match its configuration. A query embedded by one model and searched against another model's vectors doesn't fail; it returns plausible but wrong passages.
+
+Everything above this section was measured with Gemini embeddings. The serving setup was then measured again on the same questions:
+
+| Dev set, 104 questions | Gemini (fast3) | Voyage-4 |
+|---|---:|---:|
+| Recall@1 / @3 / @5 (dense + rerank) | 0.865 / 0.942 / 0.962 | 0.856 / 0.952 / 0.962 |
+| MRR | 0.905 | 0.903 |
+| Correct & faithful | 76.9% | 78.8% |
+| Correctness 2 / 1 / 0 | 83 / 19 / 2 | 83 / 19 / 2 |
+| Unfaithful (of answered) | 6.7% | 3.8% |
+| Latency p50 / p95 | 3.1 s / 5.9 s | 3.0 s / 8.7 s |
+
+Question by question, 76 are correct & faithful under both, 4 only under Gemini and 6 only under Voyage (exact McNemar p ≈ 0.75), so the switch changed nothing measurable. The higher p95 is model time: the slowest answers spent 8–9 s in the model call and under a second in search.
+
+The held-out comparison was run again as well, with the judge's scores as they came out:
+
+| Held-out, 44 questions | Gemini: loop / fast | Voyage-4: loop / fast |
+|---|---:|---:|
+| Correct & faithful | 21 / 28 | 27 / 29 |
+| Correctness = 2 | 31 / 31 | 32 / 30 |
+| Unfaithful | 17 / 6 | 9 / 1 |
+| Faithful in one mode only (loop / fast) | 1 / 12 (p ≈ 0.003) | 1 / 9 (p ≈ 0.02) |
+
+The loop agent gained the most from the new embeddings, and the correct & faithful gap shrank from 7 questions to 2 (p ≈ 0.77; it was p ≈ 0.07 before, so it was never firmly established). What holds in both runs is faithfulness: the two modes reach full marks on about the same number of questions, and the fast path adds unsupported claims far less often. That is the claim the held-out set supports, not a higher overall score.
 
 ### Reproduce
 
@@ -274,7 +303,7 @@ python eval/calibrate.py sheet --judged fast3_j2                             # h
 ## Running it
 
 ```bash
-cp .env.example .env                  # set OPENAI_API_KEY, GOOGLE_API_KEY (embeddings), VOYAGE_API_KEY (rerank)
+cp .env.example .env                  # set OPENAI_API_KEY and VOYAGE_API_KEY (embeddings and rerank)
 docker compose up -d --build --wait   # Milvus + translation + mcp-server + mcp-host + streamlit
 # put PDFs under papers/AI, papers/Security, papers/Other, then:
 python scripts/ingest_papers.py --dir papers
@@ -353,8 +382,8 @@ Read from `.env` by docker compose. `.env.example` has the evaluated settings; t
 | Variable | Service | Default | Description |
 |---|---|---|---|
 | `OPENAI_API_KEY` | mcp-host | | Required when `LLM_MODEL` is `openai:…` |
-| `GOOGLE_API_KEY` | mcp-server | | Gemini embeddings (and the chat model if `LLM_MODEL` is `google:…`) |
-| `VOYAGE_API_KEY` | mcp-server | | Required when `RETRIEVAL_RERANK=true` |
+| `GOOGLE_API_KEY` | mcp-server | | Only for `EMBEDDING_PROVIDER=google` or a `google:…` chat model |
+| `VOYAGE_API_KEY` | mcp-server | | Embeddings when `EMBEDDING_PROVIDER=voyage`, and reranking |
 | `LLM_MODEL` | mcp-host | `openai:gpt-6-luna` (`google:gemini-3-flash-preview`) | Chat model as `provider:model`, `google` or `openai` |
 | `LLM_REASONING_EFFORT` | mcp-host | provider default | `low` / `medium` / `high` for reasoning models |
 | `AGENT_MODE` | mcp-host | `fast` (`loop`) | `fast`: one search in code, one model call. `loop`: the model calls tools until it answers |
@@ -365,8 +394,9 @@ Read from `.env` by docker compose. `.env.example` has the evaluated settings; t
 | `RETRIEVAL_RERANK` | mcp-server | `true` (`false`) | Rerank first-stage hits with Voyage |
 | `RERANK_MODEL` / `RERANK_CANDIDATES` | mcp-server | `rerank-3` / `30` | Reranker model and how many first-stage hits it sees |
 | `MILVUS_URI` / `MILVUS_TOKEN` | mcp-server | `http://localhost:19530` / empty | Milvus connection |
-| `MILVUS_COLLECTION` | mcp-server | `research_papers_v2` | Dense vector + BM25 sparse field |
-| `GEMINI_EMB_MODEL` | mcp-server | `gemini-embedding-001` | Embedding model |
+| `MILVUS_COLLECTION` | mcp-server | `research_papers_voyage4_v1` (`research_papers_v2`) | Dense vector + BM25 sparse field; records the embedding model it was built with |
+| `EMBEDDING_PROVIDER` / `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION` | mcp-server | `voyage` / `voyage-4` / `1024` (`google` / `gemini-embedding-001` / native) | Must match the collection; checked before the first search |
+| `GEMINI_EMB_MODEL` | mcp-server | `gemini-embedding-001` | Google embedding model, used when `EMBEDDING_MODEL` is unset |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | mcp-server | `800` / `120` | Characters |
 | `LANGSMITH_TRACING` / `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT` | mcp-host | `false` / empty / `research-agent` | Request tracing |
 | `DEEPSEEK_API_KEY` / `EVAL_MODEL` | eval scripts | / `deepseek:deepseek-chat` | Question generation and judging |

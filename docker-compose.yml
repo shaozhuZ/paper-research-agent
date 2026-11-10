@@ -1,5 +1,5 @@
 # One-command local stack: Milvus (etcd + minio + standalone) and the four app services.
-#   cp .env.example .env   # add GOOGLE_API_KEY
+#   cp .env.example .env   # add OPENAI_API_KEY and VOYAGE_API_KEY
 #   docker compose up -d --build --wait   # --wait returns once every service is healthy
 # UI: http://localhost:8080   API: http://localhost:8000/docs   Milvus: localhost:19530
 
@@ -74,13 +74,14 @@ services:
       MILVUS_URI: http://milvus:19530
       TRANSLATION_SERVICE_URL: http://translation-service:7000
       UPLOAD_DIR: /data/uploads
-      MILVUS_COLLECTION: research_papers_v2
+      MILVUS_COLLECTION: ${MILVUS_COLLECTION:-research_papers_v2}
       # dense | bm25 | hybrid, for the agent's vector_search tool
       RETRIEVAL_MODE: ${RETRIEVAL_MODE:-dense}
       RETRIEVAL_RERANK: ${RETRIEVAL_RERANK:-false}
       RERANK_MODEL: ${RERANK_MODEL:-rerank-3}
     volumes:
       - uploads:/data/uploads:ro
+      - ./data/embedding-cache:/data/embedding-cache
     ports:
       - "9000:9000"
     restart: on-failure

@@ -115,6 +115,8 @@ def build_index(collection: Collection) -> None:
 # Main
 # ----------------------------
 def main() -> None:
+    if os.getenv("EMBEDDING_PROVIDER", "google").lower() != "google":
+        raise RuntimeError("This legacy reset script supports only Google embeddings. Use mcp-server/migrate_embeddings.py or the upload API for Voyage.")
     if not os.getenv("GOOGLE_API_KEY"):
         raise RuntimeError("Missing GOOGLE_API_KEY.")
 

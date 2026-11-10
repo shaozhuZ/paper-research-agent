@@ -9,13 +9,13 @@ from urllib.parse import quote_plus
 
 import requests as http_requests
 from fastmcp import FastMCP
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from pymilvus import MilvusClient
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 
 import retrieval
 from chunking import split_pdf
+from embeddings import EmbeddingConfig, Embeddings, create_embeddings, validate_collection
 
 #—FastMCP——
 mcp = FastMCP("Research Assistant Tools")
@@ -44,7 +44,7 @@ RETRIEVAL_RERANK = os.getenv("RETRIEVAL_RERANK", "false").lower() in ("1", "true
 RERANK_CANDIDATES = int(os.getenv("RERANK_CANDIDATES", "30"))
 RERANK_MODEL = os.getenv("RERANK_MODEL", "rerank-3")
 VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "").strip()
-EMB_MODEL = os.getenv("GEMINI_EMB_MODEL", "gemini-embedding-001")
+EMBEDDING_CONFIG = EmbeddingConfig.from_env()
 S2_API_KEY = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "").strip()
 
 TRANSLATION_SERVICE_URL = os.getenv("TRANSLATION_SERVICE_URL", "http://localhost:7000")
@@ -83,7 +83,7 @@ def _build_index_params() -> tuple[Dict, Dict]:
 
 
 _client: MilvusClient | None = None
-_embeddings: GoogleGenerativeAIEmbeddings | None = None
+_embeddings: Embeddings | None = None
 
 
 _loaded = False
@@ -100,14 +100,15 @@ def ensure_loaded() -> None:
     # search needs the collection in memory; a Milvus restart can leave it released
     global _loaded
     if not _loaded:
+        validate_collection(EMBEDDING_CONFIG, get_client().describe_collection(COLLECTION))
         get_client().load_collection(COLLECTION)
         _loaded = True
 
 
-def get_embeddings() -> GoogleGenerativeAIEmbeddings:
+def get_embeddings() -> Embeddings:
     global _embeddings
     if _embeddings is None:
-        _embeddings = GoogleGenerativeAIEmbeddings(model=EMB_MODEL)
+        _embeddings = create_embeddings(EMBEDDING_CONFIG)
     return _embeddings
 
 
@@ -221,7 +222,9 @@ def index_paper(path: str, filename: str, domain: str) -> Dict[str, Any]:
     client = get_client()
     if not client.has_collection(COLLECTION):
         index_params, _ = _build_index_params()
-        retrieval.create_collection(client, COLLECTION, len(vectors[0]), index_params)
+        retrieval.create_collection(client, COLLECTION, len(vectors[0]), index_params,
+                                    EMBEDDING_CONFIG.metadata(len(vectors[0])))
+    validate_collection(EMBEDDING_CONFIG, client.describe_collection(COLLECTION))
     client.insert(COLLECTION, [
         {"text": c.page_content, "vector": v, "filename": filename, "domain": domain,
          "chunk_id": c.metadata["chunk_id"]}

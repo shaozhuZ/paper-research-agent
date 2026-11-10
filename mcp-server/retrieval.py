@@ -6,6 +6,7 @@ Search can then go dense only, BM25 only, or both merged with RRF.
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Any
@@ -26,8 +27,10 @@ ANALYZER = {
 }
 
 
-def create_collection(client: MilvusClient, name: str, dim: int, dense_index: dict) -> None:
-    schema = client.create_schema(auto_id=True)
+def create_collection(client: MilvusClient, name: str, dim: int, dense_index: dict,
+                      embedding_metadata: dict | None = None) -> None:
+    description = "embedding:" + json.dumps(embedding_metadata, sort_keys=True) if embedding_metadata else ""
+    schema = client.create_schema(auto_id=True, description=description)
     schema.add_field("pk", DataType.INT64, is_primary=True)
     schema.add_field("text", DataType.VARCHAR, max_length=65535, enable_analyzer=True, analyzer_params=ANALYZER)
     schema.add_field("vector", DataType.FLOAT_VECTOR, dim=dim)
